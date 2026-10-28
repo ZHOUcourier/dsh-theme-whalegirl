@@ -842,5 +842,5 @@ function apply(ctx) {
 }
 
 exports.isPlugin = true;
-exports.inject = ["theme"];
+exports.inject = ["theme", "slots"];
 exports.apply = apply;
