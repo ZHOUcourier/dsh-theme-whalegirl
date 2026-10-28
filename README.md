@@ -82,6 +82,7 @@ dsh plugin --profile web remove dsh-theme-whalegirl
 ## Compatibility
 
 - Requires a DSH web client profile (`dsh.client.platform: "web"`, client bundle via `exports["./client"]`).
+- DSH 0.1.6+ / strict Cordis: the client declares `inject: ["theme", "slots"]`, so the settings card's `ctx.slots` access is legal, and every service probe falls back to `ctx.get()` instead of throwing. A host without the slots service still gets the full theme — only the optional settings card is skipped.
 - Light appearance only — faithful to the source skin, which ships one light palette.
 - Works alongside other plugins; nothing outside the gated body attribute `data-dsh-whalegirl` is touched when disabled.
 

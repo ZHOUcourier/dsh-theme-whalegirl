@@ -728,9 +728,35 @@ function createAppearanceCardModule(React) {
 	return { AppearanceCard };
 }
 
+/**
+ * Resolve a service without tripping strict Cordis. Reading an undeclared
+ * service straight off the context proxy throws
+ * (`cannot get property "slots" without inject`), whereas ctx.get() is the
+ * documented inject-free probe. `slots` is declared in exports.inject, but
+ * the fallback keeps hosts that don't provide it from aborting the whole
+ * web boot through this optional settings card.
+ */
+function resolveService(ctx, name) {
+	try {
+		const value = ctx[name];
+		if (value !== undefined && value !== null) return value;
+	} catch {
+		/* strict Cordis proxy — try the inject-free path */
+	}
+	if (typeof ctx.get === "function") {
+		try {
+			const value = ctx.get(name);
+			if (value !== undefined && value !== null) return value;
+		} catch {
+			/* service not provided by this host */
+		}
+	}
+	return null;
+}
+
 function registerAppearanceCard(ctx) {
 	if (ctx === null || typeof ctx !== "object") return;
-	const slots = ctx.slots;
+	const slots = resolveService(ctx, "slots");
 	if (slots === null || typeof slots !== "object" ||
 		typeof slots.inject !== "function" || typeof slots.register !== "function") {
 		return;
@@ -774,11 +800,8 @@ function injectStyle(cssText) {
 }
 
 function resolveTheme(ctx) {
-	if (ctx.theme !== undefined && ctx.theme !== null) return ctx.theme;
-	if (typeof ctx.get === "function") {
-		const service = ctx.get("theme");
-		if (service !== undefined && service !== null) return service;
-	}
+	const theme = resolveService(ctx, "theme");
+	if (theme !== null) return theme;
 	throw new Error("dsh-theme-whalegirl: theme service not found");
 }
 

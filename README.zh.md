@@ -82,6 +82,7 @@ dsh plugin --profile web remove dsh-theme-whalegirl
 ## 兼容性
 
 - 需要 DSH web 客户端 profile（`dsh.client.platform: "web"`，客户端入口经 `exports["./client"]` 暴露）。
+- DSH 0.1.6+ / 严格 Cordis：客户端已声明 `inject: ["theme", "slots"]`，设置卡片读取 `ctx.slots` 合法；所有服务探测失败时回退到 `ctx.get()`，不会抛异常。即使宿主没有 slots 服务，主题仍会完整应用，只是跳过可选的设置卡片。
 - 仅提供亮色外观——忠实还原源皮肤的单套亮色调色板。
 - 与其他插件共存；禁用时不触碰任何东西，只依赖受控的 body 属性 `data-dsh-whalegirl`。
 

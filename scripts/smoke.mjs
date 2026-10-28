@@ -81,6 +81,11 @@ if (loadedModule.isPlugin !== true) throw new Error("isPlugin flag missing");
 if (!Array.isArray(loadedModule.inject) || !loadedModule.inject.includes("theme")) {
 	throw new Error("inject must include 'theme'");
 }
+// Strict Cordis throws when an undeclared service is read off the context
+// proxy, so slots must be declared before registerAppearanceCard touches it.
+if (!loadedModule.inject.includes("slots")) {
+	throw new Error("inject must include 'slots'");
+}
 if (typeof loadedModule.apply !== "function") throw new Error("apply missing");
 
 const effects = [];
@@ -150,6 +155,46 @@ if (setThemeCalls.at(-1) !== "deepseek-whalegirl") throw new Error("guard did no
 setThemeCalls = [];
 for (const cb of listeners.get("theme/change") ?? []) cb({ preference: "deepseek-whalegirl" });
 if (setThemeCalls.length !== 0) throw new Error("guard must ignore its own theme");
+
+// Strict-Cordis host: reading an undeclared service throws on the proxy,
+// while ctx.get() stays probeable. The optional settings card must degrade
+// instead of aborting apply() (the 0.1.6 white-screen regression).
+const strictGetCalls = [];
+const strictCtx = new Proxy(
+	{
+		effect(fn, label) { effects.push(label); fn(); return () => {}; },
+		on() { return () => {}; },
+		get(service) {
+			strictGetCalls.push(service);
+			if (service === "theme") return themeService;
+			if (service === "slots") return { inject() {}, register() {} };
+			return undefined;
+		},
+		theme: themeService
+	},
+	{
+		get(target, prop) {
+			if (Reflect.has(target, prop)) return Reflect.get(target, prop);
+			throw new Error(`cannot get property "${String(prop)}" without inject`);
+		}
+	}
+);
+setThemeCalls = [];
+let strictThrew = null;
+try {
+	loadedModule.apply(strictCtx);
+} catch (error) {
+	strictThrew = error;
+}
+if (strictThrew !== null) {
+	throw new Error(`apply must survive strict ctx.slots: ${strictThrew.message}`);
+}
+if (setThemeCalls.at(-1) !== "deepseek-whalegirl") {
+	throw new Error("theme must still apply when ctx.slots is undeclared");
+}
+if (!strictGetCalls.includes("slots")) {
+	throw new Error("slots fallback must use the inject-free ctx.get() probe");
+}
 
 // Wallpaper data URI embedded?
 if (!source.includes("data:image/jpeg;base64,")) throw new Error("background data URI missing");
