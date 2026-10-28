@@ -28,21 +28,22 @@ DeepSeek-鲸鱼娘主题，面向 [DeepSeek Harness](https://github.com/deepseek
 
 ## 安装
 
-从 [dsh-market](https://github.com/dsh-market/dsh-market) 插件的主题 Tab 搜索 "whalegirl"，或在终端：
+npm（推荐——有版本号、便于升级、免构建）：
 
 ```sh
-# GitHub Release 预构建包（免构建）
-dsh plugin --profile web add -w https://github.com/ZHOUcourier/dsh-theme-whalegirl/releases/latest/download/dsh-theme-whalegirl.tgz
+dsh plugin --profile web add -w dsh-theme-whalegirl
 ```
+
+也可以从 [dsh-market](https://github.com/dsh-market/dsh-market) 插件的主题 Tab 搜索 "whalegirl" 安装。
 
 其他来源：
 
 ```sh
-# git 仓库
-dsh plugin --profile web add -w github:ZHOUcourier/dsh-theme-whalegirl
+# GitHub Release 预构建包（npm registry 不可用时使用）
+dsh plugin --profile web add -w https://github.com/ZHOUcourier/dsh-theme-whalegirl/releases/latest/download/dsh-theme-whalegirl.tgz
 
-# npm
-dsh plugin --profile web add -w dsh-theme-whalegirl
+# git 仓库（跟随 main）
+dsh plugin --profile web add -w github:ZHOUcourier/dsh-theme-whalegirl
 
 # 本地目录
 dsh plugin --profile web add -w link:/path/to/dsh-theme-whalegirl

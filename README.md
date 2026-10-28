@@ -28,21 +28,22 @@ Palette anchors taken from the source skin:
 
 ## Install
 
-From the [dsh-market](https://github.com/dsh-market/dsh-market) plugin's Themes tab (search "whalegirl"), or from a terminal:
+npm (recommended — versioned, easily upgradable, and no build step):
 
 ```sh
-# prebuilt tarball from GitHub Releases (no build step)
-dsh plugin --profile web add -w https://github.com/ZHOUcourier/dsh-theme-whalegirl/releases/latest/download/dsh-theme-whalegirl.tgz
+dsh plugin --profile web add -w dsh-theme-whalegirl
 ```
+
+Or install from the [dsh-market](https://github.com/dsh-market/dsh-market) plugin's Themes tab (search "whalegirl").
 
 Other sources:
 
 ```sh
-# git
-dsh plugin --profile web add -w github:ZHOUcourier/dsh-theme-whalegirl
+# prebuilt tarball from GitHub Releases (use if the npm registry is unavailable)
+dsh plugin --profile web add -w https://github.com/ZHOUcourier/dsh-theme-whalegirl/releases/latest/download/dsh-theme-whalegirl.tgz
 
-# npm
-dsh plugin --profile web add -w dsh-theme-whalegirl
+# git (tracks main)
+dsh plugin --profile web add -w github:ZHOUcourier/dsh-theme-whalegirl
 
 # local checkout
 dsh plugin --profile web add -w link:/path/to/dsh-theme-whalegirl
