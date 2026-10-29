@@ -9,8 +9,8 @@ English | [中文](README.zh.md)
 ## What it does
 
 - **Full token remap** — registers one light theme (`deepseek-whalegirl`) into DSH's native theme runtime with a complete `--dsw-*` dictionary (174 tokens): every surface, label, border, button, markdown block, scrollbar and state color derives from the DreamSkin palette.
-- **Lightly frosted by default** — the whale-girl artwork sits as a fixed backdrop behind the UI, but since 0.2.0 the frosted glass is drastically toned down: app-frame blur drops from 18px to 4px and surfaces are far more opaque, keeping just a hint of the artwork.
-- **User-adjustable glass & wallpaper** — frame blur, surface/bubble translucency, wallpaper veil, wallpaper visibility & blur and the composer focus glow are adjustable live from the plugin's card on the settings page (stored per browser), with three presets: 清爽玻璃 / DreamSkin 原味 / 纯净实底.
+- **Lightly frosted by default** — the whale-girl artwork sits as a fixed backdrop behind the UI. Since 0.2.x the app-frame blur drops from 18px to 1px and the main column carries a single paper layer, so roughly a quarter of the artwork reads through while body text keeps its contrast.
+- **User-adjustable glass & wallpaper** — frame blur, surface/bubble translucency, wallpaper veil, wallpaper visibility & blur and the composer focus glow are adjustable live from the plugin's entry on the Plugins settings page (stored per browser), with three presets: 清爽玻璃 / DreamSkin 原味 / 纯净实底.
 - **DreamSkin safe-css intent** — rounded sidebar, coffee-accent composer focus ring (toggleable), sand selection color, soft violet-tinted shadows.
 - **Native integration** — the theme pins itself through `theme.setTheme()`; if the built-in Appearance scope resets the preference to *system*, the plugin re-asserts it. An explicit light/dark pick you make in Appearance wins until the plugin is toggled off/on again.
 
@@ -59,13 +59,13 @@ The theme applies immediately once the plugin mounts. To switch away, pick a pre
 
 ## Customize
 
-Open **Settings → the plugins page** and find the **「鲸鱼娘 · 玻璃与壁纸」** card. Every change applies instantly; values are stored in this browser's localStorage (`dsh-whalegirl.prefs.v1`), not in the profile.
+Open **Settings → Plugins → Installed → Built-in plugin configuration** and click the **「鲸鱼娘 · 玻璃与壁纸」** card (it registers into `plugins.item`, the same slot as the built-in 子智能体 / 网页搜索 / Agent 循环 / 终端 pages). Every change applies instantly; values are stored in this browser's localStorage (`dsh-whalegirl.prefs.v1`), not in the profile.
 
 | Control | Range | Default | Effect |
 | --- | --- | --- | --- |
 | Presets | — | 清爽玻璃 | One-click 清爽玻璃 / DreamSkin 原味 / 纯净实底 |
-| 主框背景模糊 | 0–24px | 4px | App-frame backdrop blur radius (the old port was hard-coded 18px) |
-| 表面透明度 | 0–100% | 45% | 0 = fully opaque surfaces, 100 = original translucent design |
+| 主框背景模糊 | 0–24px | 1px | App-frame backdrop blur radius (the old port was hard-coded 18px) |
+| 表面透明度 | 0–100% | 25% | How much wallpaper the main paper lets through; 0 = solid, 100 = most open (~55%) |
 | 用户气泡透明度 | 0–100% | 60% | Translucency of the dusty-rose user bubbles |
 | 壁纸遮罩浓度 | 0–100% | 55% | Strength of the paper veil over the artwork |
 | 显示环境壁纸 | on/off | on | Hides artwork + veil for a plain paper background |
@@ -83,7 +83,8 @@ dsh plugin --profile web remove dsh-theme-whalegirl
 ## Compatibility
 
 - Requires a DSH web client profile (`dsh.client.platform: "web"`, client bundle via `exports["./client"]`).
-- DSH 0.1.6+ / strict Cordis: the client declares `inject: ["theme", "slots"]`, so the settings card's `ctx.slots` access is legal, and every service probe falls back to `ctx.get()` instead of throwing. A host without the slots service still gets the full theme — only the optional settings card is skipped.
+- DSH 0.1.6+ / strict Cordis: the client declares `inject: ["theme", "slots"]`, so the settings card's `ctx.slots` access is legal, and every service probe falls back to `ctx.get()` instead of throwing. A host without the slots service still gets the full theme — only the optional settings entry is skipped.
+- Surface ownership differs per shell: the macOS titlebar layout gives the center/right columns `--dsw-alias-bg-base`, while the browser layout paints no column background at all and lets each page (conversation root, dock tab host) paint it. The skin therefore owns the column surface itself: `[class*="_centerCol"]`/`[class*="_rightbarCol"]` carry the paper on every platform, the conversation root and `[class*="_tabHost"]` stay transparent, so every page has exactly one paper layer (~86% opaque at the default, ~14% wallpaper) on the desktop app and in a browser alike. The sidebar paints the same token twice: the layout column and the sidebar's own root (`dsh-client-ui-sidebar`'s `_root`), and the shell only blanks the root on macOS. The skin sets `--dsw-specific-sidebar-fill: transparent` inside the sidebar column and paints the 40% wash once from the column — otherwise the inner root covers it in a browser (at the solid preset it renders as an opaque panel).
 - Light appearance only — faithful to the source skin, which ships one light palette.
 - Works alongside other plugins; nothing outside the gated body attribute `data-dsh-whalegirl` is touched when disabled.
 

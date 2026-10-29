@@ -1,6 +1,6 @@
 {
   "name": "dsh-theme-whalegirl",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DeepSeek-鲸鱼娘 (Whale Girl) theme for the DeepSeek Harness web GUI — ported from the DreamSkin skin package: full --dsw-* token remap on the native theme runtime, ambient whale-girl wallpaper behind a lightly frosted rose/periwinkle UI with user-adjustable glass strength, coffee-accent composer focus and soft pill navigation.",
   "type": "module",
   "main": "lib/index.js",

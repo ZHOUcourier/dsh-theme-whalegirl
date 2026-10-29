@@ -12,13 +12,19 @@
  *    variables, so every alias/specific token in the UI follows the palette.
  *  - Layers the whale-girl artwork as an ambient fixed wallpaper behind the
  *    UI. Since 0.2.0 the frosted-glass strength is drastically reduced by
- *    default (frame blur 18px → 4px, far more opaque surfaces) and every
+ *    default (frame blur 18px → 4px, sharper surfaces) and every
  *    frost-related parameter is user-adjustable at runtime: frame blur,
  *    surface/bubble translucency, wallpaper veil, wallpaper visibility and
  *    blur, composer focus glow — plus three presets (清爽玻璃 / DreamSkin
- *    原味 / 纯净实底). Adjustments are made from the plugin's card on the
- *    settings page (settings.plugin.item slot) and persisted per browser in
+ *    原味 / 纯净实底). Adjustments are made from the plugin's entry on the
+ *    Plugins settings page (plugins.item slot, the same slot the built-in
+ *    子智能体/网页搜索/Agent 循环/终端 pages use) and persisted per browser in
  *    localStorage; they apply instantly by rewriting this plugin's style tag.
+ *  - The DSH 0.2 shell paints --dsw-alias-bg-base twice over the chat area
+ *    (center column + its dock tab host). buildSkinCss() clears the inner
+ *    layer so the paper stays a single surface; otherwise the two stacked
+ *    alphas composite to ~99% white and the wallpaper disappears behind the
+ *    transcript while the sidebar keeps its own wash and still shows it.
  *  - Adjustable surface colors are re-emitted as !important custom-property
  *    overrides on the body attribute, which beat the presenter's inline
  *    tokens without re-registering the theme.
@@ -43,25 +49,41 @@ const STYLE_TAG_ID = "dsh-whalegirl-skin";
  */
 const BACKGROUND_DATA_URI = "__WHALEGIRL_BACKGROUND_DATA_URI__";
 
+/**
+ * Build marker replaced by scripts/build.mjs. The host caches plugin bundles
+ * per revision and an already-open tab keeps the module graph it booted with,
+ * so "is this tab running the build I just produced?" is otherwise unanswerable
+ * from the UI — the settings card prints it and the style tag carries it as
+ * data-build.
+ */
+const BUILD_ID = "__WHALEGIRL_BUILD_ID__";
+
 /* ------------------------------------------------------------------ *
  * User-adjustable appearance preferences (per browser, localStorage)
  * ------------------------------------------------------------------ */
 
-const PREFS_KEY = "dsh-whalegirl.prefs.v1";
+/**
+ * v2: 0.2.2 changed the defaults (frame blur 1px, surface opacity 25%) and the
+ * paper model. Values written by the v1 key — including the 0% some browsers
+ * kept after trying the 纯净实底 preset, which makes every surface solid and
+ * hides the wallpaper entirely — would otherwise keep overriding the new
+ * defaults on exactly one browser, which reads as "app fine, web broken".
+ */
+const PREFS_KEY = "dsh-whalegirl.prefs.v2";
 
 /**
  * Defaults ARE the new look: much less frost than the original port.
- *  - frameBlur: app-frame backdrop blur radius in px (was hard-coded 18).
- *  - surfaceOpacity: 0 = fully opaque surfaces … 100 = original translucent
- *    design values. Default 45 keeps just a hint of the wallpaper.
+ *  - frameBlur: app-frame backdrop blur radius in px (hard-coded 18 before 0.2.0).
+ *  - surfaceOpacity: 0 = fully opaque surfaces … 100 = most translucent.
+ *    Default 25 keeps the paper calm under long transcripts.
  *  - bubbleOpacity: same scale for the dusty-rose user bubbles.
  *  - veilStrength: paper veil over the wallpaper (0–100% of the original).
  *  - wallpaperOn / wallpaperBlur: show-hide and blur the artwork itself.
  *  - focusGlow: coffee-accent composer focus ring on/off.
  */
 const DEFAULT_PREFS = Object.freeze({
-	frameBlur: 4,
-	surfaceOpacity: 45,
+	frameBlur: 1,
+	surfaceOpacity: 25,
 	bubbleOpacity: 60,
 	veilStrength: 55,
 	wallpaperOn: true,
@@ -194,6 +216,15 @@ const LINE = "#d3d3d4"; // hairline gray
 
 /** Near-white paper carrying the rose tint of the wallpaper (#bd9999 lifted). */
 const PAPER = mix("#ffffff", ROSE, 0.09);
+
+/**
+ * Alpha of --dsw-alias-bg-base at surfaceOpacity 100%. The main column owns
+ * this single paper layer (buildSkinCss() clears the dock tab host's copy), so
+ * at the default 45% the main surface lands near 0.75 and the wallpaper reads
+ * at ~25% — visible, but still under the reading-contrast floor. Menus and
+ * dialogs keep their own denser layer tokens.
+ */
+const BASE_ALPHA = 0.45;
 
 /* ------------------------------------------------------------------ *
  * Token ladders
@@ -343,7 +374,7 @@ function buildTokens() {
 	const sa = (designAlpha) => surfaceAlpha(designAlpha, st);
 	const sb = (designAlpha) => surfaceAlpha(designAlpha, bt);
 
-	const bgBase = alpha(PAPER, sa(0.8));
+	const bgBase = alpha(PAPER, sa(BASE_ALPHA));
 	const layer1 = alpha(mix(PAPER, "#ffffff", 0.35), sa(0.86));
 	const layer2 = alpha(mix(PAPER, "#ffffff", 0.5), sa(0.91));
 	const layer3 = alpha(mix(PAPER, "#ffffff", 0.62), sa(0.95));
@@ -485,7 +516,7 @@ function buildSkinCss(prefs) {
 body[${BODY_ATTR}] {
   background-color: ${PAPER};
   /* Live-adjustable surfaces — !important beats the presenter's inline vars. */
-  --dsw-alias-bg-base: ${alpha(PAPER, sa(0.8))} !important;
+  --dsw-alias-bg-base: ${alpha(PAPER, sa(BASE_ALPHA))} !important;
   --dsw-alias-bg-layer-1: ${alpha(mix(PAPER, "#ffffff", 0.35), sa(0.86))} !important;
   --dsw-alias-bg-layer-2: ${alpha(mix(PAPER, "#ffffff", 0.5), sa(0.91))} !important;
   --dsw-alias-bg-layer-3: ${alpha(mix(PAPER, "#ffffff", 0.62), sa(0.95))} !important;
@@ -544,6 +575,42 @@ body[${BODY_ATTR}]::after { display: none; }`);
   background: transparent;
 }`);
 
+	/*
+	 * One paper layer per column. The shell paints --dsw-alias-bg-base on the
+	 * columns only under the macOS titlebar layout, and each page inside (the
+	 * conversation root, a docked tab host) paints that same token again. On
+	 * macOS the two layers compose to ~94% white; in the browser build the
+	 * column has no background at all, so clearing the inner layer left the
+	 * transcript sitting on bare artwork. Normalize instead: every column owns
+	 * the paper, nested page surfaces stay transparent — the paper then measures
+	 * the same on the desktop app and in a browser.
+	 */
+	parts.push(`body[${BODY_ATTR}] [class*="_centerCol"],
+body[${BODY_ATTR}] [class*="_rightbarCol"] {
+  background-color: var(--dsw-alias-bg-base);
+}
+body[${BODY_ATTR}] [class*="_tabHost"] {
+  background: transparent;
+}
+/* The conversation root carries its own paper layer; the column already has one. */
+body[${BODY_ATTR}] [class*="_root"][data-phase] {
+  background-color: transparent;
+}
+body[${BODY_ATTR}] :has(> [data-slot="conversation.header"]) {
+  background-color: transparent;
+}
+/* Sidebar wash. Two elements paint --dsw-specific-sidebar-fill here: the layout
+   column and the sidebar's own root (dsh-client-ui-sidebar), and the shell only
+   blanks that root under [data-platform=darwin] — so in a browser the root
+   covers the column with the raw token at full strength, which is why the web
+   sidebar looked solid while the app showed the wallpaper. Zero the token inside
+   the column and paint the wash once, from the column, as a plain colour (no
+   color-mix, so any engine resolves it). */
+body[${BODY_ATTR}] [class*="_sidebarCol"] {
+  --dsw-specific-sidebar-fill: transparent;
+  background: ${alpha(PANEL, sa(0.34) * 0.4)};
+}`);
+
 	if (prefs.frameBlur > 0) {
 		parts.push(`/* The three-column app frame carries a CSS-module class ending in _frame. */
 body[${BODY_ATTR}] [class$="_frame"] {
@@ -593,14 +660,19 @@ body[${BODY_ATTR}] :is(textarea, [contenteditable="true"], input:not([type])):fo
 }
 
 /* ------------------------------------------------------------------ *
- * Appearance settings card — the plugin's own row on the settings page
- * ("settings.plugin.item" slot), following the maid-whale/market model:
- * hand-built React via dynamic import, all failures stay local so the
- * theme works even if react or slots are unavailable.
+ * Appearance settings entry — a row in the Plugins page's built-in plugin
+ * list (plugins.item slot, the same slot the built-in 子智能体 / 网页搜索 /
+ * Agent 循环 / 终端 pages register into). The host renders a one-liner for
+ * view:"summary" in the list card and the fields for view:"page" in the
+ * card's detail page. Everything is hand-built React reached through the
+ * ModuleLoader's synchronous require; any failure stays local so the theme
+ * still applies without the entry.
  * ------------------------------------------------------------------ */
 
-const CARD_SLOT = "settings.plugin.item";
+const CARD_SLOT = "plugins.item";
 const CARD_KEY = "whalegirl-appearance";
+const CARD_LABEL = "鲸鱼娘 · 玻璃与壁纸";
+const CARD_SUMMARY = "鲸鱼娘主题：环境壁纸、磨砂强度、表面透明度与输入框聚焦光晕。";
 
 const CARD_PRESETS = [
 	["清爽玻璃（默认）", DEFAULT_PREFS],
@@ -608,119 +680,107 @@ const CARD_PRESETS = [
 	["纯净实底", { frameBlur: 0, surfaceOpacity: 0, bubbleOpacity: 30, veilStrength: 40, wallpaperOn: true, wallpaperBlur: 0, focusGlow: true }]
 ];
 
+/**
+ * React comes from the host's module table: the bundle runs inside the
+ * ModuleLoader factory, whose synchronous require resolves the platform
+ * seeds (react is one). A native import("react") has no import map to
+ * satisfy the bare specifier and always rejects in the browser.
+ */
+function loadReact() {
+	try {
+		if (typeof require === "function") return require("react");
+	} catch {
+		/* source imported directly (tests) — no module table */
+	}
+	return null;
+}
+
 function createAppearanceCardModule(React) {
 	const h = React.createElement;
 
-	const cardStyle = {
-		listStyle: "none",
-		border: "1px solid var(--border-color, #d8d8d8)",
-		borderRadius: 12,
-		padding: 16,
-		background: "var(--surface-color, transparent)",
-		display: "grid",
-		gap: 14
+	const pageStyle = { display: "grid", gap: 16, maxWidth: 560 };
+	const rowStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20 };
+	const labelStyle = { display: "block", fontWeight: 600, fontSize: 13, lineHeight: "20px" };
+	const hintStyle = { display: "block", opacity: 0.65, fontSize: 12, lineHeight: "18px", marginTop: 2 };
+	const rangeStyle = { width: 200 };
+	const buttonStyle = {
+		cursor: "pointer",
+		borderRadius: 8,
+		padding: "4px 10px",
+		font: "inherit",
+		fontSize: 13,
+		color: "inherit",
+		border: "1px solid var(--dsw-alias-border-l2)",
+		background: "var(--dsw-alias-button-elevated-fill)"
 	};
-	const rowStyle = {
-		display: "flex",
-		justifyContent: "space-between",
-		alignItems: "center",
-		gap: 20
-	};
-	const rangeStyle = { width: 180 };
 
 	function Field({ label, hint, children }) {
 		return h("label", { style: rowStyle },
-			h("span", null,
-				h("span", { style: { display: "block", fontWeight: 600 } }, label),
-				h("small", { style: { display: "block", opacity: 0.65, marginTop: 3 } }, hint)),
+			h("span", { style: { minWidth: 0 } },
+				h("span", { style: labelStyle }, label),
+				h("small", { style: hintStyle }, hint)),
 			children);
 	}
 
-	function AppearanceCard() {
+	function AppearanceCard(props) {
+		// Hooks stay unconditional: the host renders this component for both the
+		// list card's one-liner (view:"summary") and the detail page (view:"page").
 		const prefsRef = React.useRef(loadPrefs());
 		const [prefs, setPrefs] = React.useState(prefsRef.current);
+		if (props.view === "summary") return CARD_SUMMARY;
 
 		const update = (patch) => {
 			prefsRef.current = pushPrefs({ ...prefsRef.current, ...patch });
 			setPrefs(prefsRef.current);
 		};
+		const slider = (key, label, max, step, hint) => h(Field, {
+			label,
+			hint: hint(prefs[key])
+		}, h("input", {
+			id: `whalegirl-${key}`,
+			name: key,
+			type: "range", min: 0, max, step, style: rangeStyle,
+			value: prefs[key],
+			onChange: (event) => update({ [key]: Number(event.target.value) })
+		}));
+		const toggle = (key, label, hint) => h(Field, { label, hint },
+			h("input", {
+				id: `whalegirl-${key}`,
+				name: key,
+				type: "checkbox",
+				checked: prefs[key],
+				onChange: (event) => update({ [key]: event.target.checked })
+			}));
 
-		return h("li", { style: cardStyle, "data-testid": "whalegirl-appearance-settings" },
-			h("div", null,
-				h("strong", { style: { fontSize: 16 } }, "鲸鱼娘 · 玻璃与壁纸"),
-				h("p", { style: { margin: "5px 0 0", opacity: 0.72 } },
-					"磨砂强度、表面透明度与壁纸即时生效，仅保存在当前浏览器。")),
-			h(Field, {
-				label: "预设",
-				hint: "一键切换整体风格。"
-			}, h("span", { style: { display: "flex", gap: 8 } },
-				CARD_PRESETS.map(([name, values]) =>
-					h("button", {
-						key: name,
-						type: "button",
-						style: { cursor: "pointer", borderRadius: 8, padding: "5px 10px" },
-						onClick: () => update(values)
-					}, name)))),
-			h(Field, {
-				label: "主框背景模糊",
-				hint: `应用主框毛玻璃的模糊半径，当前 ${prefs.frameBlur}px；0 为关闭。`
-			}, h("input", {
-				type: "range", min: 0, max: 24, step: 1, style: rangeStyle,
-				value: prefs.frameBlur,
-				onChange: (event) => update({ frameBlur: Number(event.target.value) })
-			})),
-			h(Field, {
-				label: "表面透明度",
-				hint: `数值越低表面越实、壁纸越难透出，当前 ${prefs.surfaceOpacity}%。`
-			}, h("input", {
-				type: "range", min: 0, max: 100, step: 5, style: rangeStyle,
-				value: prefs.surfaceOpacity,
-				onChange: (event) => update({ surfaceOpacity: Number(event.target.value) })
-			})),
-			h(Field, {
-				label: "用户气泡透明度",
-				hint: `玫瑰色气泡的透出程度，当前 ${prefs.bubbleOpacity}%。`
-			}, h("input", {
-				type: "range", min: 0, max: 100, step: 5, style: rangeStyle,
-				value: prefs.bubbleOpacity,
-				onChange: (event) => update({ bubbleOpacity: Number(event.target.value) })
-			})),
-			h(Field, {
-				label: "壁纸遮罩浓度",
-				hint: `壁纸上方的纸色薄纱强度，当前 ${prefs.veilStrength}%；0 为无遮罩。`
-			}, h("input", {
-				type: "range", min: 0, max: 100, step: 5, style: rangeStyle,
-				value: prefs.veilStrength,
-				onChange: (event) => update({ veilStrength: Number(event.target.value) })
-			})),
-			h(Field, {
-				label: "显示环境壁纸",
-				hint: "关闭后回到纯净纸色背景。"
-			}, h("input", {
-				type: "checkbox",
-				checked: prefs.wallpaperOn,
-				onChange: (event) => update({ wallpaperOn: event.target.checked })
-			})),
-			prefs.wallpaperOn ? h(Field, {
-				label: "壁纸模糊",
-				hint: `柔化插画细节，当前 ${prefs.wallpaperBlur}px。`
-			}, h("input", {
-				type: "range", min: 0, max: 16, step: 1, style: rangeStyle,
-				value: prefs.wallpaperBlur,
-				onChange: (event) => update({ wallpaperBlur: Number(event.target.value) })
-			})) : null,
-			h(Field, {
-				label: "输入框咖啡色聚焦光晕",
-				hint: "DreamSkin 原版的输入框聚焦描边与光圈。"
-			}, h("input", {
-				type: "checkbox",
-				checked: prefs.focusGlow,
-				onChange: (event) => update({ focusGlow: event.target.checked })
-			})),
+		const current = `当前：模糊 ${prefs.frameBlur}px · 表面 ${prefs.surfaceOpacity}% · 气泡 ${prefs.bubbleOpacity}% · 壁纸${prefs.wallpaperOn ? "开" : "关"} · 构建 ${BUILD_ID}`;
+
+		return h("div", { style: pageStyle, "data-testid": "whalegirl-appearance-settings" },
+			h("p", { style: { margin: 0, fontSize: 12, opacity: 0.7 } }, current),
+			h(Field, { label: "预设", hint: "一键切换整体风格，之后仍可逐项微调。" },
+				h("span", { style: { display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-end" } },
+					CARD_PRESETS.map(([name, values]) =>
+						h("button", {
+							key: name,
+							type: "button",
+							style: buttonStyle,
+							onClick: () => update(values)
+						}, name)))),
+			slider("frameBlur", "主框背景模糊", 24, 1,
+				(v) => `应用主框毛玻璃的模糊半径，当前 ${v}px；0 为关闭。`),
+			slider("surfaceOpacity", "表面透明度", 100, 5,
+				(v) => `主区域纸面的透出程度，当前 ${v}%；0 为实底，100 最通透。`),
+			slider("bubbleOpacity", "用户气泡透明度", 100, 5,
+				(v) => `玫瑰色气泡的透出程度，当前 ${v}%。`),
+			slider("veilStrength", "壁纸遮罩浓度", 100, 5,
+				(v) => `壁纸上方的纸色薄纱强度，当前 ${v}%；0 为无遮罩。`),
+			prefs.wallpaperOn ? slider("wallpaperBlur", "壁纸模糊", 16, 1,
+				(v) => `柔化插画细节，当前 ${v}px。`) : null,
+			toggle("wallpaperOn", "显示环境壁纸", "关闭后回到纯净纸色背景。"),
+			toggle("focusGlow", "输入框咖啡色聚焦光晕", "DreamSkin 原版的输入框聚焦描边与光圈。"),
 			h("div", { style: { ...rowStyle, justifyContent: "flex-end" } },
 				h("button", {
 					type: "button",
-					style: { cursor: "pointer", borderRadius: 8, padding: "5px 10px" },
+					style: buttonStyle,
 					onClick: () => update(DEFAULT_PREFS)
 				}, "恢复默认")));
 	}
@@ -755,32 +815,23 @@ function resolveService(ctx, name) {
 }
 
 function registerAppearanceCard(ctx) {
-	if (ctx === null || typeof ctx !== "object") return;
+	if (ctx === null || typeof ctx !== "object") return null;
 	const slots = resolveService(ctx, "slots");
 	if (slots === null || typeof slots !== "object" ||
 		typeof slots.inject !== "function" || typeof slots.register !== "function") {
-		return;
+		return null;
 	}
-	let reactPromise;
-	try {
-		reactPromise = Promise.resolve(import("react"));
-	} catch {
-		return; // no dynamic import in this runtime — theme still applies
+	const React = loadReact();
+	if (React === null || typeof React !== "object" || typeof React.createElement !== "function") {
+		return null; // no module table in this runtime — the theme still applies
 	}
-	reactPromise
-		.then((React) => {
-			const { AppearanceCard } = createAppearanceCardModule(React);
-			slots.inject(CARD_SLOT, () => slots.register({
-				name: CARD_SLOT,
-				key: CARD_KEY,
-				id: CARD_KEY,
-				order: 30,
-				inject: () => ({})
-			}, AppearanceCard));
-		})
-		.catch(() => {
-			/* react unavailable — card skipped, theme unaffected */
-		});
+	const { AppearanceCard } = createAppearanceCardModule(React);
+	return slots.inject(CARD_SLOT, () => slots.register({
+		name: CARD_SLOT,
+		id: CARD_KEY,
+		order: 50,
+		label: () => CARD_LABEL
+	}, AppearanceCard));
 }
 
 /* ------------------------------------------------------------------ *
@@ -793,9 +844,11 @@ function injectStyle(cssText) {
 		tag = document.createElement("style");
 		tag.id = STYLE_TAG_ID;
 		tag.dataset.plugin = "dsh-theme-whalegirl";
+		tag.dataset.build = BUILD_ID;
 		document.head.appendChild(tag);
 	}
 	tag.textContent = cssText;
+	tag.dataset.build = BUILD_ID;
 	return tag;
 }
 
@@ -833,7 +886,7 @@ function apply(ctx) {
 			console.error("dsh-theme-whalegirl: setTheme failed", error);
 		}
 
-		registerAppearanceCard(ctx);
+		const disposeCard = registerAppearanceCard(ctx);
 
 		// Guard: the built-in Appearance scope re-applies its stored preference —
 		// explicit light/dark or the "system" default — on settings reloads, and
@@ -856,6 +909,7 @@ function apply(ctx) {
 
 		return () => {
 			if (applyPrefsHook === applyPrefs) applyPrefsHook = null;
+			if (typeof disposeCard === "function") disposeCard();
 			if (offChange !== null) offChange();
 			disposeRegister();
 			styleTag.remove();

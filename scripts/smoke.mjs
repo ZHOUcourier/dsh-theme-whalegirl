@@ -58,10 +58,17 @@ const localStorageMock = {
 };
 
 let loadedModule = null;
+const reactStub = {
+	createElement: (type, props, ...children) => ({ type, props, children }),
+	useRef: (value) => ({ current: value }),
+	useState: (value) => [value, () => {}]
+};
 const windowMock = {
 	__ModuleLoader__: {
 		load({ factory }) {
-			const requireFn = () => ({});
+			// The real factory receives the ModuleLoader's synchronous require;
+			// react is one of its platform seeds.
+			const requireFn = (id) => (id === "react" ? reactStub : {});
 			loadedModule = factory(requireFn);
 		}
 	},
@@ -196,18 +203,76 @@ if (!strictGetCalls.includes("slots")) {
 	throw new Error("slots fallback must use the inject-free ctx.get() probe");
 }
 
+// Build marker resolved by scripts/build.mjs (the settings card prints it so a
+// stale tab can be told apart from a stale server).
+if (source.includes("__WHALEGIRL_BUILD_ID__")) throw new Error("build id placeholder left in bundle");
+const buildTag = documentMock.head.childNodes?.at?.(-1);
+if (buildTag?.dataset?.build === undefined) throw new Error("style tag must carry data-build");
+
 // Wallpaper data URI embedded?
 if (!source.includes("data:image/jpeg;base64,")) throw new Error("background data URI missing");
 
 // Reduced-frost defaults + adjustable surfaces live in the emitted stylesheet.
 const skinCss = css;
-if (!skinCss.includes("backdrop-filter: blur(4px)")) throw new Error("default frame blur should be 4px");
+if (!skinCss.includes("backdrop-filter: blur(1px)")) throw new Error("default frame blur should be 1px");
 if (/blur\(18px\)/.test(skinCss)) throw new Error("legacy 18px blur must be gone by default");
 if (!skinCss.includes("--dsw-alias-bg-base: ") || !skinCss.includes("!important")) {
 	throw new Error("adjustable surface overrides missing");
 }
 
-// Appearance settings card is wired to the plugin settings slot.
-if (!source.includes('"settings.plugin.item"')) throw new Error("settings card slot missing");
+// Appearance settings entry lives on the Plugins page (plugins.item), the same
+// slot the built-in 子智能体/网页搜索/Agent 循环/终端 pages use.
+if (!source.includes('"plugins.item"')) throw new Error("settings entry slot missing");
+if (source.includes("settings.plugin.item")) throw new Error("stale settings.plugin.item slot name");
+
+const registeredItems = [];
+let cardDisposed = false;
+const slotsService = {
+	inject(slot, factory) {
+		if (slot !== "plugins.item") throw new Error(`unexpected slot: ${slot}`);
+		return factory();
+	},
+	register(options, component) {
+		registeredItems.push({ options, component });
+		return () => { cardDisposed = true; };
+	}
+};
+const cardCtx = {
+	effect(fn, label) { effects.push(label); fn(); return () => {}; },
+	on() { return () => {}; },
+	get(service) {
+		if (service === "theme") return themeService;
+		if (service === "slots") return slotsService;
+		return undefined;
+	},
+	theme: themeService
+};
+loadedModule.apply(cardCtx);
+
+const entry = registeredItems.find((item) => item.options.name === "plugins.item");
+if (entry === undefined) throw new Error("plugins.item entry was not registered");
+if (entry.options.id !== "whalegirl-appearance") throw new Error(`bad entry id: ${entry.options.id}`);
+if (entry.options.order !== 50) throw new Error("entry should sort after the built-in pages");
+if (typeof entry.options.label() !== "string" || entry.options.label().length === 0) {
+	throw new Error("entry label missing");
+}
+const summary = entry.component({ view: "summary" });
+if (typeof summary !== "string" || summary.length === 0) {
+	throw new Error("summary view must render a one-liner string");
+}
+const page = entry.component({ view: "page" });
+if (page === null || page === undefined) throw new Error("page view rendered nothing");
+
+// One paper layer: the columns own it on every platform, nested page surfaces
+// (conversation root, dock tab host) stay transparent.
+for (const rule of ['[class*="_centerCol"]', '[class*="_rightbarCol"]', '[class*="_tabHost"]', '[class*="_root"][data-phase]']) {
+	if (!skinCss.includes(rule)) throw new Error(`missing paper-layer rule ${rule}`);
+}
+if (!/\[class\*="_sidebarCol"\] \{[^}]*--dsw-specific-sidebar-fill: transparent;[^}]*background: #abb4cf/.test(skinCss)) {
+	throw new Error("sidebar column must own the wash and blank the inner fill");
+}
+if (!skinCss.includes('[class*="_tabHost"] {\n  background: transparent;')) {
+	throw new Error("dock tab host must stay transparent");
+}
 
 console.log("smoke test passed ✓");
