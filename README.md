@@ -5,6 +5,7 @@ DeepSeek-鲸鱼娘 (Whale Girl) theme for the [DeepSeek Harness](https://github.
 English | [中文](README.zh.md)
 
 ![preview](assets/previews/preview.png)
+![plugin settings](assets/previews/settings.png)
 
 ## What it does
 

@@ -5,6 +5,7 @@ DeepSeek-鲸鱼娘主题，面向 [DeepSeek Harness](https://github.com/deepseek
 [English](README.md) | 中文
 
 ![预览](assets/previews/preview.png)
+![插件设置](assets/previews/settings.png)
 
 ## 功能
 
