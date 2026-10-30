@@ -1,7 +1,8 @@
 {
   "name": "dsh-theme-whalegirl",
-  "version": "0.2.2",
-  "description": "DeepSeek-鲸鱼娘 (Whale Girl) theme for the DeepSeek Harness web GUI — ported from the DreamSkin skin package: full --dsw-* token remap on the native theme runtime, ambient whale-girl wallpaper behind a lightly frosted rose/periwinkle UI with user-adjustable glass strength, coffee-accent composer focus and soft pill navigation.",
+  "version": "0.3.0",
+  "description": "DeepSeek-鲸鱼娘 (Whale Girl) theme for the DeepSeek Harness web GUI — full --dsw-* token remap on the native theme runtime, ambient artwork behind a light paper layer with adjustable glass and a conversation-only paper opacity. Visual identity: 溟月 by 上善无形 → DeepSeek maid ver. by ZipZipPipe; artwork CC BY-NC-SA 4.0, code MIT.",
+  "icon": "assets/icon.png",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -33,20 +34,26 @@
   "files": [
     "lib",
     "assets/background.jpg",
+    "assets/icon.png",
     "assets/previews",
     "cordis.patch.yml",
     "skin.json",
     "README.md",
     "README.zh.md",
+    "CREDITS.md",
     "LICENSE"
   ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.1.6"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/build.mjs --check",
     "test": "node scripts/smoke.mjs",
     "prepare": "node scripts/build.mjs"
   },
-  "license": "MIT",
+  "license": "MIT AND CC-BY-NC-SA-4.0",
   "author": "ZHOUcourier",
   "publishConfig": {
     "access": "public"

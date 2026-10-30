@@ -220,21 +220,35 @@ if (!skinCss.includes("--dsw-alias-bg-base: ") || !skinCss.includes("!important"
 	throw new Error("adjustable surface overrides missing");
 }
 
-// Appearance settings entry lives on the Plugins page (plugins.item), the same
-// slot the built-in 子智能体/网页搜索/Agent 循环/终端 pages use.
-if (!source.includes('"plugins.item"')) throw new Error("settings entry slot missing");
+// The settings form is the bundle's own configuration on the installed
+// package page; the credits also get a dedicated detail section.
+if (!source.includes('"plugins.bundle.config"')) throw new Error("bundle-config slot missing");
+if (!source.includes('"plugins.detail.section"')) throw new Error("detail-section slot missing");
 if (source.includes("settings.plugin.item")) throw new Error("stale settings.plugin.item slot name");
 
+function renderText(node) {
+	if (node === null || node === undefined || node === false) return "";
+	if (Array.isArray(node)) return node.map(renderText).join("");
+	if (typeof node === "string" || typeof node === "number") return String(node);
+	if (typeof node === "object" && typeof node.type === "function") {
+		return renderText(node.type({ ...(node.props ?? {}), children: node.children }));
+	}
+	if (typeof node === "object") return renderText(node.children);
+	return "";
+}
+
 const registeredItems = [];
-let cardDisposed = false;
+const disposedItems = [];
 const slotsService = {
 	inject(slot, factory) {
-		if (slot !== "plugins.item") throw new Error(`unexpected slot: ${slot}`);
+		if (slot !== "plugins.bundle.config" && slot !== "plugins.detail.section") {
+			throw new Error(`unexpected slot: ${slot}`);
+		}
 		return factory();
 	},
 	register(options, component) {
 		registeredItems.push({ options, component });
-		return () => { cardDisposed = true; };
+		return () => { disposedItems.push(options.name); };
 	}
 };
 const cardCtx = {
@@ -249,19 +263,63 @@ const cardCtx = {
 };
 loadedModule.apply(cardCtx);
 
-const entry = registeredItems.find((item) => item.options.name === "plugins.item");
-if (entry === undefined) throw new Error("plugins.item entry was not registered");
-if (entry.options.id !== "whalegirl-appearance") throw new Error(`bad entry id: ${entry.options.id}`);
-if (entry.options.order !== 50) throw new Error("entry should sort after the built-in pages");
-if (typeof entry.options.label() !== "string" || entry.options.label().length === 0) {
-	throw new Error("entry label missing");
-}
-const summary = entry.component({ view: "summary" });
-if (typeof summary !== "string" || summary.length === 0) {
-	throw new Error("summary view must render a one-liner string");
-}
-const page = entry.component({ view: "page" });
+const settingsEntry = registeredItems.find((item) => item.options.name === "plugins.bundle.config");
+if (settingsEntry === undefined) throw new Error("plugins.bundle.config entry was not registered");
+if (settingsEntry.options.key !== "dsh-theme-whalegirl") throw new Error(`bad bundle key: ${settingsEntry.options.key}`);
+const page = settingsEntry.component({ view: "page" });
 if (page === null || page === undefined) throw new Error("page view rendered nothing");
+const pageText = renderText(page);
+for (const needle of ["对话纸面透明度", "出处与授权", "CC BY-NC-SA 4.0", "溟月", "powerdog996"]) {
+	if (!pageText.includes(needle)) throw new Error(`settings page missing ${needle}`);
+}
+
+const creditsEntry = registeredItems.find((item) => item.options.name === "plugins.detail.section");
+if (creditsEntry === undefined) throw new Error("plugins.detail.section entry was not registered");
+const creditsForUs = creditsEntry.component({ subject: { kind: "bundle", pkg: { name: "dsh-theme-whalegirl" } } });
+const creditsText = renderText(creditsForUs);
+if (!creditsText.includes("视觉定型") || !creditsText.includes("ZipZipPipe") || !creditsText.includes("CC BY-NC-SA 4.0")) {
+	throw new Error("credits section missing the visual chain");
+}
+const creditsForOther = creditsEntry.component({ subject: { kind: "bundle", pkg: { name: "another-plugin" } } });
+if (creditsForOther !== null) throw new Error("credits section must only render for this package");
+
+// Hosts without plugins.bundle.config still get the old built-in card.
+const fallbackItems = [];
+const fallbackSlots = {
+	inject(slot, factory) {
+		if (slot !== "plugins.item") throw new Error(`unexpected fallback slot: ${slot}`);
+		return factory();
+	},
+	register(options, component) {
+		fallbackItems.push({ options, component });
+		return () => {};
+	}
+};
+const fallbackCtx = {
+	effect(fn, label) { effects.push(label); fn(); return () => {}; },
+	on() { return () => {}; },
+	get(service) {
+		if (service === "theme") return themeService;
+		if (service === "slots") return fallbackSlots;
+		return undefined;
+	},
+	theme: themeService
+};
+loadedModule.apply(fallbackCtx);
+const fallbackEntry = fallbackItems.find((item) => item.options.name === "plugins.item");
+if (fallbackEntry === undefined) throw new Error("plugins.item fallback was not registered");
+if (fallbackEntry.options.id !== "whalegirl-appearance") throw new Error(`bad fallback id: ${fallbackEntry.options.id}`);
+const fallbackSummary = fallbackEntry.component({ view: "summary" });
+if (typeof fallbackSummary !== "string" || fallbackSummary.length === 0) {
+	throw new Error("fallback summary must render a one-liner string");
+}
+const fallbackPage = fallbackEntry.component({ view: "page" });
+if (fallbackPage === null || fallbackPage === undefined) throw new Error("fallback page rendered nothing");
+if (!renderText(fallbackPage).includes("对话纸面透明度")) throw new Error("fallback page missing conversation control");
+
+if (!skinCss.includes('data-slot="conversation.header"')) {
+	throw new Error("conversation-only paper rule missing");
+}
 
 // One paper layer: the columns own it on every platform, nested page surfaces
 // (conversation root, dock tab host) stay transparent.

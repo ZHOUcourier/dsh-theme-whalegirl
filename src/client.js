@@ -16,10 +16,12 @@
  *    frost-related parameter is user-adjustable at runtime: frame blur,
  *    surface/bubble translucency, wallpaper veil, wallpaper visibility and
  *    blur, composer focus glow — plus three presets (清爽玻璃 / DreamSkin
- *    原味 / 纯净实底). Adjustments are made from the plugin's entry on the
- *    Plugins settings page (plugins.item slot, the same slot the built-in
- *    子智能体/网页搜索/Agent 循环/终端 pages use) and persisted per browser in
- *    localStorage; they apply instantly by rewriting this plugin's style tag.
+ *    原味 / 纯净实底). Since 0.3.0 the form is contributed as the bundle's own
+ *    configuration (plugins.bundle.config), so it sits on the installed
+ *    package's page rather than the built-in configuration list, and a
+ *    conversation-only paper opacity is scoped to the transcript column.
+ *    Preferences persist per browser in localStorage; they apply instantly by
+ *    rewriting this plugin's style tag.
  *  - The DSH 0.2 shell paints --dsw-alias-bg-base twice over the chat area
  *    (center column + its dock tab host). buildSkinCss() clears the inner
  *    layer so the paper stays a single surface; otherwise the two stacked
@@ -75,7 +77,11 @@ const PREFS_KEY = "dsh-whalegirl.prefs.v2";
  * Defaults ARE the new look: much less frost than the original port.
  *  - frameBlur: app-frame backdrop blur radius in px (hard-coded 18 before 0.2.0).
  *  - surfaceOpacity: 0 = fully opaque surfaces … 100 = most translucent.
- *    Default 25 keeps the paper calm under long transcripts.
+ *    Default 25 keeps the paper calm under long transcripts; applies to the
+ *    shell, home, menus and other surfaces.
+ *  - conversationOpacity: same scale, scoped to the conversation column only.
+ *    Default 25 mirrors the current look; raise it to let the wallpaper read
+ *    through a long transcript without making every popover translucent.
  *  - bubbleOpacity: same scale for the dusty-rose user bubbles.
  *  - veilStrength: paper veil over the wallpaper (0–100% of the original).
  *  - wallpaperOn / wallpaperBlur: show-hide and blur the artwork itself.
@@ -84,6 +90,7 @@ const PREFS_KEY = "dsh-whalegirl.prefs.v2";
 const DEFAULT_PREFS = Object.freeze({
 	frameBlur: 1,
 	surfaceOpacity: 25,
+	conversationOpacity: 25,
 	bubbleOpacity: 60,
 	veilStrength: 55,
 	wallpaperOn: true,
@@ -106,6 +113,7 @@ function normalizePrefs(raw) {
 	return {
 		frameBlur: num(p.frameBlur, 0, 24, DEFAULT_PREFS.frameBlur),
 		surfaceOpacity: num(p.surfaceOpacity, 0, 100, DEFAULT_PREFS.surfaceOpacity),
+		conversationOpacity: num(p.conversationOpacity, 0, 100, DEFAULT_PREFS.conversationOpacity),
 		bubbleOpacity: num(p.bubbleOpacity, 0, 100, DEFAULT_PREFS.bubbleOpacity),
 		veilStrength: num(p.veilStrength, 0, 100, DEFAULT_PREFS.veilStrength),
 		wallpaperOn: p.wallpaperOn === false ? false : true,
@@ -220,8 +228,8 @@ const PAPER = mix("#ffffff", ROSE, 0.09);
 /**
  * Alpha of --dsw-alias-bg-base at surfaceOpacity 100%. The main column owns
  * this single paper layer (buildSkinCss() clears the dock tab host's copy), so
- * at the default 45% the main surface lands near 0.75 and the wallpaper reads
- * at ~25% — visible, but still under the reading-contrast floor. Menus and
+ * at the default 25% the main surface lands near 0.86 and the wallpaper reads
+ * at ~14% — visible, but still under the reading-contrast floor. Menus and
  * dialogs keep their own denser layer tokens.
  */
 const BASE_ALPHA = 0.45;
@@ -503,9 +511,11 @@ const TOKENS = buildTokens();
 
 function buildSkinCss(prefs) {
 	const st = prefs.surfaceOpacity / 100;
+	const ct = prefs.conversationOpacity / 100;
 	const bt = prefs.bubbleOpacity / 100;
 	const vs = prefs.veilStrength / 100;
 	const sa = (designAlpha) => surfaceAlpha(designAlpha, st);
+	const sc = (designAlpha) => surfaceAlpha(designAlpha, ct);
 	const sb = (designAlpha) => surfaceAlpha(designAlpha, bt);
 	const wallBlur = prefs.wallpaperBlur;
 	const wallInset = wallBlur > 0 ? `${-(wallBlur * 2)}px` : "0";
@@ -589,6 +599,13 @@ body[${BODY_ATTR}]::after { display: none; }`);
 body[${BODY_ATTR}] [class*="_rightbarCol"] {
   background-color: var(--dsw-alias-bg-base);
 }
+/* Conversation-only paper. The transcript column is the only surface that
+   hosts a conversation header; scoping the token here lets the dedicated
+   slider change long-transcript paper without touching home, menus or the
+   plugin pages, which keep the global surface setting. */
+body[${BODY_ATTR}] [class*="_centerCol"]:has([data-slot="conversation.header"]) {
+  --dsw-alias-bg-base: ${alpha(PAPER, sc(BASE_ALPHA))} !important;
+}
 body[${BODY_ATTR}] [class*="_tabHost"] {
   background: transparent;
 }
@@ -660,25 +677,37 @@ body[${BODY_ATTR}] :is(textarea, [contenteditable="true"], input:not([type])):fo
 }
 
 /* ------------------------------------------------------------------ *
- * Appearance settings entry — a row in the Plugins page's built-in plugin
- * list (plugins.item slot, the same slot the built-in 子智能体 / 网页搜索 /
- * Agent 循环 / 终端 pages register into). The host renders a one-liner for
- * view:"summary" in the list card and the fields for view:"page" in the
- * card's detail page. Everything is hand-built React reached through the
- * ModuleLoader's synchronous require; any failure stays local so the theme
- * still applies without the entry.
+ * Appearance settings entry — the bundle's own configuration page
+ * (plugins.bundle.config, keyed by the package name), so the form appears on
+ * the installed package's page rather than the built-in configuration list.
+ * Hosts without that slot keep the older plugins.item card as a fallback. The
+ * credits also register a plugins.detail.section so the source and license
+ * chain survive even when the settings form is not open. Everything is
+ * hand-built React reached through the ModuleLoader's synchronous require;
+ * any failure stays local so the theme still applies without the entry.
  * ------------------------------------------------------------------ */
 
-const CARD_SLOT = "plugins.item";
+const PKG_NAME = "dsh-theme-whalegirl";
+const SETTINGS_SLOT = "plugins.bundle.config";
+const CREDITS_SLOT = "plugins.detail.section";
+const FALLBACK_SLOT = "plugins.item";
 const CARD_KEY = "whalegirl-appearance";
+const CREDITS_KEY = "whalegirl-credits";
 const CARD_LABEL = "鲸鱼娘 · 玻璃与壁纸";
-const CARD_SUMMARY = "鲸鱼娘主题：环境壁纸、磨砂强度、表面透明度与输入框聚焦光晕。";
+const CARD_SUMMARY = "鲸鱼娘主题：环境壁纸、玻璃强度、对话纸面与输入框聚焦光晕。代码 MIT，插画 CC BY-NC-SA 4.0。";
 
 const CARD_PRESETS = [
 	["清爽玻璃（默认）", DEFAULT_PREFS],
-	["DreamSkin 原味", { frameBlur: 18, surfaceOpacity: 100, bubbleOpacity: 100, veilStrength: 100, wallpaperOn: true, wallpaperBlur: 0, focusGlow: true }],
-	["纯净实底", { frameBlur: 0, surfaceOpacity: 0, bubbleOpacity: 30, veilStrength: 40, wallpaperOn: true, wallpaperBlur: 0, focusGlow: true }]
+	["DreamSkin 原味", { frameBlur: 18, surfaceOpacity: 100, conversationOpacity: 100, bubbleOpacity: 100, veilStrength: 100, wallpaperOn: true, wallpaperBlur: 0, focusGlow: true }],
+	["纯净实底", { frameBlur: 0, surfaceOpacity: 0, conversationOpacity: 0, bubbleOpacity: 30, veilStrength: 40, wallpaperOn: true, wallpaperBlur: 0, focusGlow: true }]
 ];
+
+const CREDITS_LINKS = {
+	shangshan: "https://www.bilibili.com/opus/1231977657712771073",
+	zip: "https://space.bilibili.com/4168597/",
+	dreamskin: "https://dreamskin.cc/themes/ver_cb557ececaa5de3f3dbe",
+	cc: "https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans"
+};
 
 /**
  * React comes from the host's module table: the bundle runs inside the
@@ -722,6 +751,68 @@ function createAppearanceCardModule(React) {
 			children);
 	}
 
+	const linkStyle = {
+		color: "var(--dsw-alias-brand-primary)",
+		textDecoration: "underline",
+		textUnderlineOffset: "2px"
+	};
+	const creditStyle = {
+		display: "grid",
+		gap: 5,
+		fontSize: 12,
+		lineHeight: "19px",
+		color: "var(--dsw-alias-label-secondary)"
+	};
+	const creditTitleStyle = {
+		margin: 0,
+		fontSize: 13,
+		fontWeight: 650,
+		color: "var(--dsw-alias-label-primary)"
+	};
+	const creditLineStyle = { margin: 0 };
+
+	function CreditLink({ href, children }) {
+		return h("a", {
+			href,
+			target: "_blank",
+			rel: "noreferrer",
+			style: linkStyle
+		}, children);
+	}
+
+	function Credits({ compact = false }) {
+		return h("section", {
+			style: creditStyle,
+			"data-testid": "whalegirl-credits"
+		},
+			h("h3", { style: creditTitleStyle }, "出处与授权"),
+			h("p", { style: creditLineStyle },
+				"视觉定型：B站UP主“",
+				h(CreditLink, { href: CREDITS_LINKS.shangshan }, "上善无形"),
+				"”生成了原创角色“",
+				h(CreditLink, { href: CREDITS_LINKS.shangshan }, "溟月"),
+				"”，后由UP主",
+				h(CreditLink, { href: CREDITS_LINKS.zip }, "ZipZipPipe"),
+				"融入 DeepSeek 元素换上女仆装。"),
+			h("p", { style: creditLineStyle },
+				"遵守 ",
+				h(CreditLink, { href: CREDITS_LINKS.cc }, "CC BY-NC-SA 4.0"),
+				" 协议（署名、非商用、相同方式共享）。"),
+			compact
+				? h("p", { style: creditLineStyle },
+						"DreamSkin 皮肤包：",
+						h(CreditLink, { href: CREDITS_LINKS.dreamskin }, "DeepSeek-鲸鱼娘"),
+						"（作者 powerdog996）。本插件代码 MIT；随包插画/视觉 CC BY-NC-SA 4.0。完整出处见本页底部。")
+				: [
+						h("p", { key: "dream", style: creditLineStyle },
+							"DreamSkin 皮肤包：",
+							h(CreditLink, { href: CREDITS_LINKS.dreamskin }, "DeepSeek-鲸鱼娘"),
+							"（作者 powerdog996，包 ver_cb557ececaa5de3f3dbe；页面标注 MIT）。本插件只移植其配色与视觉意图，插画/角色视觉仍按 CC BY-NC-SA 4.0 处理。"),
+						h("p", { key: "code", style: creditLineStyle },
+							"本插件代码 MIT；随包插画/视觉 CC BY-NC-SA 4.0。")
+					]);
+	}
+
 	function AppearanceCard(props) {
 		// Hooks stay unconditional: the host renders this component for both the
 		// list card's one-liner (view:"summary") and the detail page (view:"page").
@@ -752,9 +843,10 @@ function createAppearanceCardModule(React) {
 				onChange: (event) => update({ [key]: event.target.checked })
 			}));
 
-		const current = `当前：模糊 ${prefs.frameBlur}px · 表面 ${prefs.surfaceOpacity}% · 气泡 ${prefs.bubbleOpacity}% · 壁纸${prefs.wallpaperOn ? "开" : "关"} · 构建 ${BUILD_ID}`;
+		const current = `当前：模糊 ${prefs.frameBlur}px · 表面 ${prefs.surfaceOpacity}% · 对话 ${prefs.conversationOpacity}% · 气泡 ${prefs.bubbleOpacity}% · 壁纸${prefs.wallpaperOn ? "开" : "关"} · 构建 ${BUILD_ID}`;
 
 		return h("div", { style: pageStyle, "data-testid": "whalegirl-appearance-settings" },
+			h("h2", { style: { margin: 0, fontSize: 18, lineHeight: "26px", fontWeight: 650 } }, CARD_LABEL),
 			h("p", { style: { margin: 0, fontSize: 12, opacity: 0.7 } }, current),
 			h(Field, { label: "预设", hint: "一键切换整体风格，之后仍可逐项微调。" },
 				h("span", { style: { display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-end" } },
@@ -768,7 +860,9 @@ function createAppearanceCardModule(React) {
 			slider("frameBlur", "主框背景模糊", 24, 1,
 				(v) => `应用主框毛玻璃的模糊半径，当前 ${v}px；0 为关闭。`),
 			slider("surfaceOpacity", "表面透明度", 100, 5,
-				(v) => `主区域纸面的透出程度，当前 ${v}%；0 为实底，100 最通透。`),
+				(v) => `全局纸面的透出程度，当前 ${v}%；0 为实底，100 最通透。`),
+			slider("conversationOpacity", "对话纸面透明度", 100, 5,
+				(v) => `仅影响对话消息区的纸面，当前 ${v}%；0 为实底，100 最通透。首页、插件页仍用上面的全局设置。`),
 			slider("bubbleOpacity", "用户气泡透明度", 100, 5,
 				(v) => `玫瑰色气泡的透出程度，当前 ${v}%。`),
 			slider("veilStrength", "壁纸遮罩浓度", 100, 5,
@@ -782,10 +876,16 @@ function createAppearanceCardModule(React) {
 					type: "button",
 					style: buttonStyle,
 					onClick: () => update(DEFAULT_PREFS)
-				}, "恢复默认")));
+				}, "恢复默认")),
+			h("div", {
+				style: {
+					borderTop: "1px solid var(--dsw-alias-border-l1)",
+					paddingTop: 12
+				}
+			}, h(Credits, { compact: true })));
 	}
 
-	return { AppearanceCard };
+	return { AppearanceCard, Credits };
 }
 
 /**
@@ -814,24 +914,72 @@ function resolveService(ctx, name) {
 	return null;
 }
 
-function registerAppearanceCard(ctx) {
+function registerSettings(ctx, React) {
 	if (ctx === null || typeof ctx !== "object") return null;
 	const slots = resolveService(ctx, "slots");
 	if (slots === null || typeof slots !== "object" ||
 		typeof slots.inject !== "function" || typeof slots.register !== "function") {
 		return null;
 	}
-	const React = loadReact();
 	if (React === null || typeof React !== "object" || typeof React.createElement !== "function") {
 		return null; // no module table in this runtime — the theme still applies
 	}
-	const { AppearanceCard } = createAppearanceCardModule(React);
-	return slots.inject(CARD_SLOT, () => slots.register({
-		name: CARD_SLOT,
-		id: CARD_KEY,
-		order: 50,
-		label: () => CARD_LABEL
-	}, AppearanceCard));
+	const { AppearanceCard, Credits } = createAppearanceCardModule(React);
+	try {
+		// 0.3.0: own the bundle's configuration page, the same surface an
+		// installed package opens from the Plugins list.
+		const dispose = slots.inject(SETTINGS_SLOT, () => slots.register({
+			name: SETTINGS_SLOT,
+			key: PKG_NAME
+		}, AppearanceCard));
+		return { dispose, Credits };
+	} catch (error) {
+		// Hosts without the bundle-config slot keep the old built-in card.
+		try {
+			const dispose = slots.inject(FALLBACK_SLOT, () => slots.register({
+				name: FALLBACK_SLOT,
+				id: CARD_KEY,
+				order: 50,
+				label: () => CARD_LABEL
+			}, AppearanceCard));
+			return { dispose, Credits };
+		} catch {
+			return { dispose: null, Credits };
+		}
+	}
+}
+
+function createCreditsSection(React, Credits) {
+	const h = React.createElement;
+	return function CreditsSection({ subject }) {
+		const ours = subject !== null && typeof subject === "object" && (
+			(subject.kind === "bundle" && subject.pkg !== undefined && subject.pkg.name === PKG_NAME) ||
+			(subject.kind === "item" && subject.id === CARD_KEY)
+		);
+		if (!ours) return null;
+		return h("div", { style: { maxWidth: 760, paddingTop: 4 } }, h(Credits));
+	};
+}
+
+function registerCredits(ctx, React, Credits) {
+	if (ctx === null || typeof ctx !== "object" || Credits === null) return null;
+	const slots = resolveService(ctx, "slots");
+	if (slots === null || typeof slots !== "object" ||
+		typeof slots.inject !== "function" || typeof slots.register !== "function") {
+		return null;
+	}
+	if (React === null || typeof React !== "object" || typeof React.createElement !== "function") {
+		return null;
+	}
+	try {
+		return slots.inject(CREDITS_SLOT, () => slots.register({
+			name: CREDITS_SLOT,
+			id: CREDITS_KEY,
+			order: 80
+		}, createCreditsSection(React, Credits)));
+	} catch {
+		return null;
+	}
 }
 
 /* ------------------------------------------------------------------ *
@@ -886,7 +1034,10 @@ function apply(ctx) {
 			console.error("dsh-theme-whalegirl: setTheme failed", error);
 		}
 
-		const disposeCard = registerAppearanceCard(ctx);
+		const React = loadReact();
+		const settings = registerSettings(ctx, React);
+		const disposeCard = settings === null ? null : settings.dispose;
+		const disposeCredits = settings === null ? null : registerCredits(ctx, React, settings.Credits);
 
 		// Guard: the built-in Appearance scope re-applies its stored preference —
 		// explicit light/dark or the "system" default — on settings reloads, and
@@ -910,6 +1061,7 @@ function apply(ctx) {
 		return () => {
 			if (applyPrefsHook === applyPrefs) applyPrefsHook = null;
 			if (typeof disposeCard === "function") disposeCard();
+			if (typeof disposeCredits === "function") disposeCredits();
 			if (offChange !== null) offChange();
 			disposeRegister();
 			styleTag.remove();

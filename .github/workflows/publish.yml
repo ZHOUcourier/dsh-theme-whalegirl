@@ -8,6 +8,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,3 +24,12 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Attach version-free tarball to the release
+        if: github.event_name == 'release'
+        run: |
+          npm pack
+          mv dsh-theme-whalegirl-*.tgz dsh-theme-whalegirl.tgz
+          gh release upload "$RELEASE_TAG" dsh-theme-whalegirl.tgz --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
