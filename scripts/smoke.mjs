@@ -36,6 +36,7 @@ function makeElement() {
 		append(child) { child.isConnected = true; },
 		remove() { this.isConnected = false; },
 		setAttribute(name, value) { this.attrs = this.attrs || {}; this.attrs[name] = value; },
+		hasAttribute(name) { return name in (this.attrs || {}); },
 		getAttribute(name) { return (this.attrs || {})[name] ?? null; },
 		removeAttribute(name) { delete (this.attrs || {})[name]; },
 		addEventListener() {},
@@ -150,12 +151,18 @@ if (!documentMock.body.attrs || documentMock.body.attrs["data-dsh-whalegirl"] !=
 if (setThemeCalls.at(-1) !== "deepseek-whalegirl") throw new Error("setTheme not pinned");
 if (!effects.includes("dsh-theme-whalegirl: register")) throw new Error("effect label missing");
 
-// Guard behavior: any foreign preference write re-asserts our theme…
+// Guard behavior: any foreign preference write re-asserts our theme. The
+// re-assert is deferred out of the dispatch so a presenter subscribed after
+// this plugin cannot overwrite it with the foreign snapshot.
 setThemeCalls = [];
 for (const cb of listeners.get("theme/change") ?? []) cb({ preference: "system" });
+await Promise.resolve();
+await Promise.resolve();
 if (setThemeCalls.at(-1) !== "deepseek-whalegirl") throw new Error("guard did not re-assert on system");
 setThemeCalls = [];
 for (const cb of listeners.get("theme/change") ?? []) cb({ preference: "dark" });
+await Promise.resolve();
+await Promise.resolve();
 if (setThemeCalls.at(-1) !== "deepseek-whalegirl") throw new Error("guard did not re-assert on explicit pick");
 
 // …and its own change event does not loop.
@@ -218,6 +225,11 @@ if (!skinCss.includes("backdrop-filter: blur(1px)")) throw new Error("default fr
 if (/blur\(18px\)/.test(skinCss)) throw new Error("legacy 18px blur must be gone by default");
 if (!skinCss.includes("--dsw-alias-bg-base: ") || !skinCss.includes("!important")) {
 	throw new Error("adjustable surface overrides missing");
+}
+// The whole palette (not just surfaces) is pinned in the stylesheet so a
+// foreign dark presenter can never leave white labels on the light paper.
+for (const pinned of ["--dsw-alias-label-primary: #352970 !important;", "color-scheme: light !important"]) {
+	if (!skinCss.includes(pinned)) throw new Error(`palette fallback missing: ${pinned}`);
 }
 
 // The settings form is the bundle's own configuration on the installed

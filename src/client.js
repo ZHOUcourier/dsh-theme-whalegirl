@@ -32,6 +32,15 @@
  *    tokens without re-registering the theme.
  *  - Gated on the body attribute `data-dsh-whalegirl` so nothing leaks when
  *    the plugin is off.
+ *  - Startup-safe on the desktop shell. The durable ui-theme section loads
+ *    after plugins and its adoption reverts the preference to the built-in
+ *    scheme; on a cold desktop start ui-layout's presenter subscribes after
+ *    this plugin, so a synchronous re-assert inside the guard is replayed and
+ *    then overwritten by the foreign snapshot of the same dispatch (white
+ *    labels over this light paper). The guard therefore re-asserts on a
+ *    microtask, with a few delayed pins for a late adoption, and the full
+ *    token palette is also emitted as !important body variables — a missed
+ *    pin then costs the wallpaper, never the contrast.
  *
  * Selection semantics follow the skin model: activating the plugin pins the
  * theme via theme.setTheme(), and a `theme/change` guard re-asserts it
@@ -520,12 +529,30 @@ function buildSkinCss(prefs) {
 	const wallBlur = prefs.wallpaperBlur;
 	const wallInset = wallBlur > 0 ? `${-(wallBlur * 2)}px` : "0";
 
+	const tokenDecls = Object.entries(TOKENS)
+		.map(([name, value]) => `  ${name}: ${value} !important;`)
+		.join("\n");
+
 	const parts = [];
 
+	/*
+	 * The palette is pinned here, not only in the theme runtime. On desktop the
+	 * shell can present its built-in scheme after this plugin's theme was
+	 * selected (boot settings adoption, a presenter that mounts later), and its
+	 * near-white labels then sit on this plugin's light paper. These
+	 * declarations beat both the built-in palette sheets and the presenter's
+	 * inline variables for as long as the plugin owns the body attribute, so a
+	 * missed re-assert can cost the wallpaper, never the contrast.
+	 */
 	parts.push(`
+html:has(body[${BODY_ATTR}]) {
+  color-scheme: light !important;
+}
 body[${BODY_ATTR}] {
+  color: ${INK};
   background-color: ${PAPER};
-  /* Live-adjustable surfaces — !important beats the presenter's inline vars. */
+${tokenDecls}
+  /* Live-adjustable surfaces — emitted after the base palette so the prefs win. */
   --dsw-alias-bg-base: ${alpha(PAPER, sa(BASE_ALPHA))} !important;
   --dsw-alias-bg-layer-1: ${alpha(mix(PAPER, "#ffffff", 0.35), sa(0.86))} !important;
   --dsw-alias-bg-layer-2: ${alpha(mix(PAPER, "#ffffff", 0.5), sa(0.91))} !important;
@@ -1010,6 +1037,12 @@ function resolveTheme(ctx) {
  * Plugin entry
  * ------------------------------------------------------------------ */
 
+/** Microtask deferral that also works in the vm-based smoke harness. */
+const defer = (fn) => {
+	if (typeof queueMicrotask === "function") queueMicrotask(fn);
+	else Promise.resolve().then(fn);
+};
+
 function apply(ctx) {
 	ctx.effect(() => {
 		document.body.setAttribute(BODY_ATTR, "");
@@ -1023,16 +1056,74 @@ function apply(ctx) {
 		applyPrefsHook = applyPrefs;
 
 		const theme = resolveTheme(ctx);
-		const disposeRegister = theme.register({
-			id: THEME_ID,
-			colorScheme: "light",
-			tokens: TOKENS
-		});
-		try {
-			theme.setTheme(THEME_ID);
-		} catch (error) {
-			console.error("dsh-theme-whalegirl: setTheme failed", error);
-		}
+		const definition = { id: THEME_ID, colorScheme: "light", tokens: TOKENS };
+		let disposeRegister = null;
+		let ownsRegistration = false;
+		let disposed = false;
+
+		const ensureRegistered = () => {
+			try {
+				const snapshot = typeof theme.getTheme === "function" ? theme.getTheme() : null;
+				const themes = snapshot && snapshot.themes;
+				if (Array.isArray(themes) && themes.some((entry) => entry.id === THEME_ID)) return;
+			} catch {
+				/* no snapshot to inspect — try the registration itself */
+			}
+			try {
+				const dispose = theme.register(definition);
+				if (typeof dispose === "function") {
+					disposeRegister = dispose;
+					ownsRegistration = true;
+				}
+			} catch (error) {
+				// A sibling instance of this bundle (dev reload, double mount) may
+				// already own the id; that registration is still the look we want,
+				// so keep going instead of leaving the plugin half-applied.
+				console.error("dsh-theme-whalegirl: register failed", error);
+			}
+		};
+
+		const pinTheme = () => {
+			if (disposed) return;
+			// A sibling instance's teardown can strip the shared DOM before this
+			// one settles; restore it rather than staying half-applied.
+			if (!document.body.hasAttribute(BODY_ATTR)) document.body.setAttribute(BODY_ATTR, "");
+			if (document.getElementById(STYLE_TAG_ID) === null) injectStyle(buildSkinCss(prefs));
+			try {
+				if (theme.getTheme().preference === THEME_ID) return;
+			} catch {
+				/* no snapshot — let setTheme report a missing registration */
+			}
+			ensureRegistered();
+			try {
+				theme.setTheme(THEME_ID);
+			} catch (error) {
+				console.error("dsh-theme-whalegirl: setTheme failed", error);
+			}
+		};
+
+		/*
+		 * The re-assert MUST leave the current theme/change dispatch. On a cold
+		 * desktop start this plugin is applied before ui-layout mounts its
+		 * presenter, so when the durable ui-theme section finishes loading and
+		 * publishes the built-in preference, the presenter is last in the
+		 * listener list: a synchronous setTheme() inside the guard is replayed
+		 * first and then overwritten by the foreign snapshot of that same
+		 * dispatch — white labels on the light paper. Deferring makes the
+		 * re-assert a fresh publish that every presenter applies last.
+		 */
+		const pinSoon = () => {
+			if (disposed) return;
+			defer(pinTheme);
+		};
+
+		ensureRegistered();
+		pinTheme();
+		// The settings document can land after the plugin starts (desktop loads
+		// it over the transport), possibly before the guard below exists.
+		const later = typeof setTimeout === "function" ? setTimeout : null;
+		const pinTimers =
+			later === null ? [] : [200, 1000, 3000].map((ms) => later(pinTheme, ms));
 
 		const React = loadReact();
 		const settings = registerSettings(ctx, React);
@@ -1050,20 +1141,18 @@ function apply(ctx) {
 				? ctx.on("theme/change", (snapshot) => {
 						const preference = snapshot && snapshot.preference;
 						if (typeof preference !== "string" || preference === THEME_ID) return;
-						try {
-							theme.setTheme(THEME_ID);
-						} catch {
-							/* not registered yet — the next change event retries */
-						}
+						pinSoon();
 					})
 				: null;
 
 		return () => {
+			disposed = true;
+			for (const timer of pinTimers) clearTimeout(timer);
 			if (applyPrefsHook === applyPrefs) applyPrefsHook = null;
 			if (typeof disposeCard === "function") disposeCard();
 			if (typeof disposeCredits === "function") disposeCredits();
 			if (offChange !== null) offChange();
-			disposeRegister();
+			if (ownsRegistration && typeof disposeRegister === "function") disposeRegister();
 			styleTag.remove();
 			document.body.removeAttribute(BODY_ATTR);
 		};
