@@ -1,5 +1,9 @@
 # dsh-theme-whalegirl
 
+[![ci](https://github.com/ZHOUcourier/dsh-theme-whalegirl/actions/workflows/ci.yml/badge.svg)](https://github.com/ZHOUcourier/dsh-theme-whalegirl/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-theme-whalegirl)](https://www.npmjs.com/package/dsh-theme-whalegirl)
+[![license](https://img.shields.io/badge/license-MIT%20%2B%20CC%20BY--NC--SA%204.0-blue)](CREDITS.md)
+
 DeepSeek-鲸鱼娘 (Whale Girl) theme for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web UI — a native light theme built from the DreamSkin palette, with the whale-girl artwork behind a light paper layer and live glass, wallpaper and conversation-paper controls.
 
 English | [中文](README.zh.md)
@@ -15,8 +19,10 @@ English | [中文](README.zh.md)
 - **Light paper, not heavy frost** — the whale-girl artwork sits as a fixed backdrop behind the UI. Since 0.2.x the app-frame blur is 1px by default and the main column carries a single paper layer, so about 14% of the artwork reads through while body text keeps its contrast.
 - **Conversation-only paper opacity** — since 0.3.0 a separate slider controls the transcript column only. Long chats can show more wallpaper without making the home page, menus or plugin pages more translucent; those keep the global surface setting.
 - **Settings on the installed package page** — the form is contributed as the bundle's own configuration (`plugins.bundle.config`), so it appears on **Plugins → Installed → dsh-theme-whalegirl**, above the component list. It is no longer part of the built-in configuration cards.
-- **Adjustable glass & wallpaper** — frame blur, global surface and bubble translucency, conversation paper, wallpaper veil, wallpaper visibility & blur and the composer focus glow are adjustable live, with three presets: 清爽玻璃 / DreamSkin 原味 / 纯净实底.
-- **Native integration** — the theme pins itself through `theme.setTheme()`; if the built-in Appearance scope resets the preference to *system*, the plugin re-asserts it. An explicit light/dark pick you make in Appearance wins until the plugin is toggled off/on again.
+- **Adjustable glass & wallpaper** — frame blur, global surface and bubble translucency, conversation paper, wallpaper veil, visibility, focus, zoom and blur, and the composer focus glow are adjustable live, with three presets: 清爽玻璃 / DreamSkin 原味 / 纯净实底. The card follows the host UI language and can be pinned to 中文 or English.
+- **Native integration** — the theme pins itself through `theme.setTheme()` and a `theme/change` guard re-asserts it whenever anything else writes another preference. That includes an explicit light/dark pick in Appearance, because the desktop shell writes exactly that when it adopts its stored settings after plugins mount: **the way back to the built-in appearance is to disable this plugin**, in the market Themes tab or on its installed-package page. The settings card says the same thing where you would look for it.
+- **Two stylesheet layers** — the token palette and the wallpaper bytes live in a static layer written once per mount; only the few declarations the sliders move are rewritten on adjustment, so dragging a control costs ~4 KB instead of re-parsing the ~0.4 MB wallpaper.
+- **Self-reporting compatibility** — the paper model depends on host class names that a refactor can rename, so the plugin probes them and prints `宿主适配 3/3 · 实测 DSH 0.2.1-rc.5` on the settings card, naming any miss in the console as well.
 - **Light appearance only** — faithful to the source skin, which ships one light palette.
 
 Palette anchors taken from the source skin:
@@ -60,7 +66,7 @@ Then restart the profile:
 dsh --profile web
 ```
 
-The theme applies immediately once the plugin mounts. To switch away, pick a preference in Settings → General → Appearance (the plugin steps aside); to come back, toggle the plugin off/on in the market Themes tab.
+The theme applies immediately once the plugin mounts. While the plugin is enabled it owns the appearance: a light/dark pick in Settings → General → Appearance is reclaimed, because the same write happens on the desktop's own cold start. To switch back to the built-in appearance, disable the plugin (market Themes tab, or its installed-package page); toggling it on again brings the theme back.
 
 ## Settings
 
@@ -73,12 +79,17 @@ Open **Plugins → Installed → dsh-theme-whalegirl** and use the **「鲸鱼�
 | 表面透明度 | 0–100% | 25% | Global paper opacity (home, menus, plugin pages); 0 = solid, 100 = most open (~55%) |
 | 对话纸面透明度 | 0–100% | 25% | Conversation transcript only; 0 = solid, 100 = most open (~45% paper) |
 | 用户气泡透明度 | 0–100% | 60% | Translucency of the dusty-rose user bubbles |
-| 壁纸遮罩浓度 | 0–100% | 55% | Strength of the paper veil over the artwork |
-| 显示环境壁纸 | on/off | on | Hides artwork + veil for a plain paper background |
-| 壁纸模糊 | 0–16px | 0px | Softens the artwork itself |
-| 输入框咖啡色聚焦光晕 | on/off | on | The DreamSkin composer focus ring |
+| 壁纸遮罩浓度 / Wallpaper veil | 0–100% | 55% | Strength of the paper veil over the artwork |
+| 显示环境壁纸 / Show wallpaper | on/off | on | Hides artwork + veil for a plain paper background |
+| 壁纸焦点上下 / Wallpaper focus | 0–100% | 50% | Vertical position of the artwork, for windows whose crop cuts the subject off |
+| 壁纸缩放 / Wallpaper zoom | 100–200% | 100% | Scale of the artwork, for narrow windows where `cover` crops hard |
+| 壁纸模糊 / Wallpaper blur | 0–16px | 0px | Softens the artwork itself |
+| 输入框咖啡色聚焦光晕 / Focus glow | on/off | on | The DreamSkin composer focus ring |
+| 界面语言 / Language | auto → zh → en | auto | Card copy follows the **host UI** language (`<html lang>`), with the browser language only as a fallback; pin it here |
 
-**恢复默认** restores the defaults above. Upgrading from 0.1.x starts from the new (lighter) defaults; nothing is migrated.
+The card header also prints the current values, the stylesheet build id, and the host-hook report (`宿主适配 3/3 · 实测 DSH 0.2.1-rc.5`).
+
+**恢复默认 / Restore defaults** restores the defaults above. Upgrading from 0.1.x starts from the new (lighter) defaults; nothing is migrated.
 
 Uninstall:
 
@@ -89,7 +100,8 @@ dsh plugin --profile web remove dsh-theme-whalegirl
 ## Compatibility
 
 - Requires a DSH web client profile (`dsh.client.platform: "web"`, client bundle via `exports["./client"]`).
-- DSH `>= 0.1.6` is declared in `engines.dsh`; tested on DSH 0.2.1-rc.3. The client declares `inject: ["theme", "slots"]`, so the settings form's `ctx.slots` access is legal and every service probe falls back to `ctx.get()` instead of throwing. A host without the slots service still gets the full theme; only the optional settings entry is skipped.
+- DSH `>= 0.1.6` is declared in `engines.dsh`; tested on DSH 0.2.1-rc.5. The client declares `inject: ["theme", "slots"]`, so the settings form's `ctx.slots` access is legal and every service probe falls back to `ctx.get()` instead of throwing. A host without the slots service still gets the full theme; only the optional settings entry is skipped.
+- No upper bound is declared on purpose: the theme is visual-only, and a false ceiling would hide it from newer hosts that in fact work. What a real breakage does is drop the hook report on the settings card to `宿主适配 2/3` and log the missing selector — please paste that line into an issue.
 - Light appearance only — the source skin ships one light palette.
 - Works alongside other plugins; nothing outside the gated body attribute `data-dsh-whalegirl` is touched when disabled.
 
@@ -102,12 +114,23 @@ Since 0.3.0, `[class*="_centerCol"]:has([data-slot="conversation.header"])` re-e
 ## Development
 
 ```sh
-npm run build   # wrap src/client.js into lib/client.js + embed assets/background.jpg
-npm test        # smoke test: register/guard/dispose against a mocked DOM
-npm run check   # verify lib/ matches src/ (CI)
+npm run build        # wrap src/client.js into lib/client.js + embed assets/background.jpg
+npm test             # smoke test: register/guard/card/dispose against a mocked DOM
+npm run check        # verify lib/ matches src/ (CI)
+npm run test:browser -- --url "http://127.0.0.1:5190/?token=…"   # real Chromium, computed styles
 ```
 
 The build is dependency-free (plain Node). `lib/` is committed so installs never need a build step.
+
+`npm test` proves the plugin's logic; it cannot see the things that actually broke in the past (two paper layers composing to ~99% white, the web sidebar rendering solid where the desktop showed the wallpaper, a cold-start presenter overwriting the palette). `npm run test:browser` boots a real DSH web profile and asserts computed styles instead of strings: the label colour lands on `#352970`, the wallpaper paints behind a single translucent column (alpha ≈ 0.86 at the default, ≈ 0.48 at 95%), preferences survive a reload, and no page error is raised. Boot any profile for it — a throwaway one keeps your own clean:
+
+```sh
+dsh --profile whalecheck --from-default-profile web --dump-config   # create without booting
+dsh plugin --profile whalecheck add -w link:"$PWD"
+dsh --profile whalecheck --no-open --port 5190                      # prints the token URL
+```
+
+Playwright is resolved from a local install, `npm root -g`, or the npx cache; if its Chromium was never downloaded the script falls back to the system Chrome.
 
 ## Credits & license
 
@@ -129,4 +152,4 @@ The theme was ported from the DreamSkin package [DeepSeek-鲸鱼娘 `ver_cb557ec
 
 ## Release notes
 
-See [GitHub Releases](https://github.com/ZHOUcourier/dsh-theme-whalegirl/releases) for the changes in each version.
+See [CHANGELOG.md](CHANGELOG.md) or [GitHub Releases](https://github.com/ZHOUcourier/dsh-theme-whalegirl/releases) for the changes in each version.

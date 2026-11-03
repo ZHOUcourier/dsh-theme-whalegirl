@@ -1,7 +1,12 @@
 /**
  * Smoke test: evaluate the built client bundle in a mocked DOM and drive
- * apply() through register → guard → dispose.
+ * apply() through register → guard → settings card → dispose.
  * Run: node scripts/smoke.mjs
+ *
+ * The harness mocks the ModuleLoader factory, localStorage and just enough DOM
+ * to run the plugin. It is deliberately strict about the two stylesheet layers,
+ * because which tag carries the wallpaper bytes is the difference between a
+ * slider that feels instant and one that re-parses 0.4 MB per input event.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -11,232 +16,151 @@ import vm from "node:vm";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = readFileSync(join(root, "lib/client.js"), "utf8");
 
-let registered = null;
-let setThemeCalls = [];
-const listeners = new Map();
-
-class MockClassList {
-	constructor() { this.set = new Set(); }
-	add(...names) { for (const n of names) this.set.add(n); }
-	remove(...names) { for (const n of names) this.set.delete(n); }
-}
+const BASE_ID = "dsh-whalegirl-base";
+const SKIN_ID = "dsh-whalegirl-skin";
+const SETTINGS_SLOT = "plugins.bundle.config";
+const CREDITS_SLOT = "plugins.detail.section";
+const FALLBACK_SLOT = "plugins.item";
 
 function makeElement() {
-	return {
+	const el = {
 		id: "",
 		dataset: {},
 		textContent: "",
 		isConnected: false,
+		parentNode: null,
 		childNodes: [],
-		classList: new MockClassList(),
+		attrs: {},
+		classList: { add() {}, remove() {} },
 		appendChild(child) {
+			child.parentNode = el;
 			child.isConnected = true;
-			this.childNodes.push(child);
+			el.childNodes.push(child);
 		},
-		append(child) { child.isConnected = true; },
-		remove() { this.isConnected = false; },
-		setAttribute(name, value) { this.attrs = this.attrs || {}; this.attrs[name] = value; },
-		hasAttribute(name) { return name in (this.attrs || {}); },
-		getAttribute(name) { return (this.attrs || {})[name] ?? null; },
-		removeAttribute(name) { delete (this.attrs || {})[name]; },
+		insertBefore(child, before) {
+			child.parentNode = el;
+			child.isConnected = true;
+			const at = el.childNodes.indexOf(before);
+			if (at < 0) el.childNodes.push(child);
+			else el.childNodes.splice(at, 0, child);
+		},
+		append(child) { el.appendChild(child); },
+		remove() {
+			el.isConnected = false;
+			if (el.parentNode !== null) {
+				const at = el.parentNode.childNodes.indexOf(el);
+				if (at >= 0) el.parentNode.childNodes.splice(at, 1);
+				el.parentNode = null;
+			}
+		},
+		setAttribute(name, value) { el.attrs[name] = value; },
+		hasAttribute(name) { return name in el.attrs; },
+		getAttribute(name) { return el.attrs[name] ?? null; },
+		removeAttribute(name) { delete el.attrs[name]; },
 		addEventListener() {},
 		removeEventListener() {}
 	};
+	return el;
 }
 
-const documentMock = {
-	head: makeElement(),
-	body: makeElement(),
-	createElement: () => makeElement(),
-	getElementById: () => null
-};
+/**
+ * A host document. `hooks` is the set of plugin selector probes the mocked shell
+ * actually renders, so the compatibility report can be driven both ways.
+ */
+function makeDocument(hooks = null, hostLang = "zh-CN") {
+	const head = makeElement();
+	const body = makeElement();
+	const rendered = hooks === null ? null : new Set(hooks);
+	head.childNodes = [];
+	return {
+		head,
+		body,
+		// The host sets <html lang> for its own localization; the card follows it.
+		documentElement: { lang: hostLang },
+		createElement: () => makeElement(),
+		// Styles are the only elements this plugin looks up by id, and they all
+		// live in <head>, so the childNodes list is the single source of truth —
+		// a removed tag is really gone, which is what the dispose test needs.
+		getElementById: (id) => head.childNodes.find((tag) => tag.id === id) ?? null,
+		querySelector: (selector) => (rendered !== null && rendered.has(selector) ? body : null)
+	};
+}
 
-const storage = new Map();
-const localStorageMock = {
-	getItem: (k) => (storage.has(k) ? storage.get(k) : null),
-	setItem: (k, v) => storage.set(k, String(v)),
-	removeItem: (k) => storage.delete(k)
-};
+function makeStorage() {
+	const data = new Map();
+	return {
+		data,
+		getItem: (k) => (data.has(k) ? data.get(k) : null),
+		setItem: (k, v) => data.set(k, String(v)),
+		removeItem: (k) => data.delete(k)
+	};
+}
 
-let loadedModule = null;
 const reactStub = {
 	createElement: (type, props, ...children) => ({ type, props, children }),
 	useRef: (value) => ({ current: value }),
 	useState: (value) => [value, () => {}]
 };
-const windowMock = {
-	__ModuleLoader__: {
-		load({ factory }) {
-			// The real factory receives the ModuleLoader's synchronous require;
-			// react is one of its platform seeds.
-			const requireFn = (id) => (id === "react" ? reactStub : {});
-			loadedModule = factory(requireFn);
-		}
-	},
-	localStorage: localStorageMock,
-	console
-};
 
-const context = vm.createContext({
-	window: windowMock,
-	document: documentMock,
-	localStorage: localStorageMock
-});
-vm.runInContext(source, context, { filename: "lib/client.js" });
-
-if (loadedModule === null) throw new Error("module was never loaded");
-if (loadedModule.isPlugin !== true) throw new Error("isPlugin flag missing");
-if (!Array.isArray(loadedModule.inject) || !loadedModule.inject.includes("theme")) {
-	throw new Error("inject must include 'theme'");
-}
-// Strict Cordis throws when an undeclared service is read off the context
-// proxy, so slots must be declared before registerAppearanceCard touches it.
-if (!loadedModule.inject.includes("slots")) {
-	throw new Error("inject must include 'slots'");
-}
-if (typeof loadedModule.apply !== "function") throw new Error("apply missing");
-
-const effects = [];
-const themeService = {
-	register(def) {
-		registered = def;
-		let disposed = false;
-		return () => { disposed = true; };
-	},
-	setTheme(id) { setThemeCalls.push(id); }
-};
-const ctx = {
-	effect(fn, label) { effects.push(label); fn(); return () => {}; },
-	on(event, cb) {
-		if (!listeners.has(event)) listeners.set(event, []);
-		listeners.get(event).push(cb);
-		return () => listeners.delete(event);
-	},
-	get(service) { return service === "theme" ? themeService : undefined; },
-	theme: undefined // force the ctx.get path
-};
-
-loadedModule.apply(ctx);
-
-// Assertions -----------------------------------------------------------------
-if (registered === null) throw new Error("theme.register was not called");
-if (registered.id !== "deepseek-whalegirl") throw new Error(`bad id: ${registered.id}`);
-if (registered.colorScheme !== "light") throw new Error("colorScheme must be light");
-
-const tokenNames = Object.keys(registered.tokens);
-const required = [
-	"--dsw-static-neutral-bluish-1000",
-	"--dsw-static-neutral-bluish-50",
-	"--dsw-alias-bg-base",
-	"--dsw-alias-brand-primary",
-	"--dsw-alias-button-primary-fill",
-	"--dsw-alias-label-primary",
-	"--dsw-specific-sidebar-fill",
-	"--dsw-specific-bubble",
-	"--dsw-shadow-lv3",
-	"--dsw-linear-gradient-think"
-];
-for (const name of required) {
-	if (!(name in registered.tokens)) throw new Error(`missing token ${name}`);
-	if (registered.tokens[name] === "") throw new Error(`empty token ${name}`);
-}
-console.log(`tokens registered: ${tokenNames.length}`);
-
-const css = documentMock.head.childNodes?.at?.(-1)?.textContent ?? "";
-const styleTag = [...(documentMock.head.childNodes ?? [])];
-void styleTag;
-if (!documentMock.body.attrs || documentMock.body.attrs["data-dsh-whalegirl"] !== "") {
-	throw new Error("body attribute not set");
-}
-if (setThemeCalls.at(-1) !== "deepseek-whalegirl") throw new Error("setTheme not pinned");
-if (!effects.includes("dsh-theme-whalegirl: register")) throw new Error("effect label missing");
-
-// Guard behavior: any foreign preference write re-asserts our theme. The
-// re-assert is deferred out of the dispatch so a presenter subscribed after
-// this plugin cannot overwrite it with the foreign snapshot.
-setThemeCalls = [];
-for (const cb of listeners.get("theme/change") ?? []) cb({ preference: "system" });
-await Promise.resolve();
-await Promise.resolve();
-if (setThemeCalls.at(-1) !== "deepseek-whalegirl") throw new Error("guard did not re-assert on system");
-setThemeCalls = [];
-for (const cb of listeners.get("theme/change") ?? []) cb({ preference: "dark" });
-await Promise.resolve();
-await Promise.resolve();
-if (setThemeCalls.at(-1) !== "deepseek-whalegirl") throw new Error("guard did not re-assert on explicit pick");
-
-// …and its own change event does not loop.
-setThemeCalls = [];
-for (const cb of listeners.get("theme/change") ?? []) cb({ preference: "deepseek-whalegirl" });
-if (setThemeCalls.length !== 0) throw new Error("guard must ignore its own theme");
-
-// Strict-Cordis host: reading an undeclared service throws on the proxy,
-// while ctx.get() stays probeable. The optional settings card must degrade
-// instead of aborting apply() (the 0.1.6 white-screen regression).
-const strictGetCalls = [];
-const strictCtx = new Proxy(
-	{
-		effect(fn, label) { effects.push(label); fn(); return () => {}; },
-		on() { return () => {}; },
-		get(service) {
-			strictGetCalls.push(service);
-			if (service === "theme") return themeService;
-			if (service === "slots") return { inject() {}, register() {} };
-			return undefined;
+/**
+ * Boot the bundle in an isolated context.
+ * `options.language` sets navigator.language; `options.hooks` lists the host
+ * selectors the shell renders; `options.console` captures warnings.
+ */
+function boot(options = {}) {
+	const documentMock = makeDocument(options.hooks ?? null, options.hostLang ?? "zh-CN");
+	const storage = makeStorage();
+	const noop = () => {};
+	const contextConsole = options.console ?? { log: noop, warn: noop, error: noop };
+	let loadedModule = null;
+	const windowMock = {
+		__ModuleLoader__: {
+			load({ factory }) {
+				// The real factory receives the ModuleLoader's synchronous require;
+				// react is one of its platform seeds.
+				const requireFn = (id) => (id === "react" ? reactStub : {});
+				loadedModule = factory(requireFn);
+			}
 		},
-		theme: themeService
-	},
-	{
-		get(target, prop) {
-			if (Reflect.has(target, prop)) return Reflect.get(target, prop);
-			throw new Error(`cannot get property "${String(prop)}" without inject`);
-		}
+		localStorage: storage,
+		console: contextConsole
+	};
+	const context = vm.createContext({
+		window: windowMock,
+		document: documentMock,
+		localStorage: storage,
+		console: contextConsole,
+		navigator: options.language === undefined ? undefined : { language: options.language },
+		Promise,
+		JSON,
+		Map,
+		Set,
+		Array,
+		Object,
+		Error,
+		TypeError,
+		String,
+		Number,
+		Boolean,
+		Math,
+		Date,
+		parseInt,
+		isNaN
+	});
+	vm.runInContext(source, context, { filename: "lib/client.js" });
+	if (loadedModule === null) throw new Error("module was never loaded");
+	return { module: loadedModule, documentMock, storage, console: contextConsole };
+}
+
+function assert(condition, message) {
+	if (!condition) throw new Error(message);
+}
+
+function containsAll(haystack, needles, label) {
+	for (const needle of needles) {
+		assert(haystack.includes(needle), `${label} missing ${needle}`);
 	}
-);
-setThemeCalls = [];
-let strictThrew = null;
-try {
-	loadedModule.apply(strictCtx);
-} catch (error) {
-	strictThrew = error;
 }
-if (strictThrew !== null) {
-	throw new Error(`apply must survive strict ctx.slots: ${strictThrew.message}`);
-}
-if (setThemeCalls.at(-1) !== "deepseek-whalegirl") {
-	throw new Error("theme must still apply when ctx.slots is undeclared");
-}
-if (!strictGetCalls.includes("slots")) {
-	throw new Error("slots fallback must use the inject-free ctx.get() probe");
-}
-
-// Build marker resolved by scripts/build.mjs (the settings card prints it so a
-// stale tab can be told apart from a stale server).
-if (source.includes("__WHALEGIRL_BUILD_ID__")) throw new Error("build id placeholder left in bundle");
-const buildTag = documentMock.head.childNodes?.at?.(-1);
-if (buildTag?.dataset?.build === undefined) throw new Error("style tag must carry data-build");
-
-// Wallpaper data URI embedded?
-if (!source.includes("data:image/jpeg;base64,")) throw new Error("background data URI missing");
-
-// Reduced-frost defaults + adjustable surfaces live in the emitted stylesheet.
-const skinCss = css;
-if (!skinCss.includes("backdrop-filter: blur(1px)")) throw new Error("default frame blur should be 1px");
-if (/blur\(18px\)/.test(skinCss)) throw new Error("legacy 18px blur must be gone by default");
-if (!skinCss.includes("--dsw-alias-bg-base: ") || !skinCss.includes("!important")) {
-	throw new Error("adjustable surface overrides missing");
-}
-// The whole palette (not just surfaces) is pinned in the stylesheet so a
-// foreign dark presenter can never leave white labels on the light paper.
-for (const pinned of ["--dsw-alias-label-primary: #352970 !important;", "color-scheme: light !important"]) {
-	if (!skinCss.includes(pinned)) throw new Error(`palette fallback missing: ${pinned}`);
-}
-
-// The settings form is the bundle's own configuration on the installed
-// package page; the credits also get a dedicated detail section.
-if (!source.includes('"plugins.bundle.config"')) throw new Error("bundle-config slot missing");
-if (!source.includes('"plugins.detail.section"')) throw new Error("detail-section slot missing");
-if (source.includes("settings.plugin.item")) throw new Error("stale settings.plugin.item slot name");
 
 function renderText(node) {
 	if (node === null || node === undefined || node === false) return "";
@@ -249,100 +173,531 @@ function renderText(node) {
 	return "";
 }
 
-const registeredItems = [];
-const disposedItems = [];
-const slotsService = {
-	inject(slot, factory) {
-		if (slot !== "plugins.bundle.config" && slot !== "plugins.detail.section") {
-			throw new Error(`unexpected slot: ${slot}`);
+/** Fake theme/slots host that registers whatever the plugin injects. */
+function makeHost(themeService, slotsService) {
+	const registered = [];
+	const disposed = [];
+	const listeners = new Map();
+	const slots = {
+		inject(slot, factory) {
+			return factory();
+		},
+		register(opts, component) {
+			const entry = { opts, component, isDisposed: false };
+			registered.push(entry);
+			return () => { entry.isDisposed = true; disposed.push(opts.name); };
 		}
-		return factory();
-	},
-	register(options, component) {
-		registeredItems.push({ options, component });
-		return () => { disposedItems.push(options.name); };
+	};
+	const ctx = {
+		effects: [],
+		theme: themeService,
+		slots: slotsService === undefined ? slots : slotsService,
+		effect(fn, label) {
+			ctx.effects.push(label);
+			const dispose = fn();
+			return () => { if (typeof dispose === "function") dispose(); };
+		},
+		on(event, cb) {
+			if (!listeners.has(event)) listeners.set(event, []);
+			listeners.get(event).push(cb);
+			return () => listeners.delete(event);
+		},
+		get(service) {
+			if (service === "theme") return themeService;
+			if (service === "slots") return ctx.slots;
+			return undefined;
+		}
+	};
+	return { ctx, registered, disposed, listeners, slots };
+}
+
+/** Walk a rendered element tree looking for a DOM id. */
+function findNode(node, id) {
+	if (node === null || node === undefined || typeof node !== "object") return null;
+	if (Array.isArray(node)) {
+		for (const child of node) {
+			const hit = findNode(child, id);
+			if (hit !== null) return hit;
+		}
+		return null;
 	}
-};
-const cardCtx = {
-	effect(fn, label) { effects.push(label); fn(); return () => {}; },
-	on() { return () => {}; },
-	get(service) {
-		if (service === "theme") return themeService;
-		if (service === "slots") return slotsService;
-		return undefined;
-	},
-	theme: themeService
-};
-loadedModule.apply(cardCtx);
-
-const settingsEntry = registeredItems.find((item) => item.options.name === "plugins.bundle.config");
-if (settingsEntry === undefined) throw new Error("plugins.bundle.config entry was not registered");
-if (settingsEntry.options.key !== "dsh-theme-whalegirl") throw new Error(`bad bundle key: ${settingsEntry.options.key}`);
-const page = settingsEntry.component({ view: "page" });
-if (page === null || page === undefined) throw new Error("page view rendered nothing");
-const pageText = renderText(page);
-for (const needle of ["对话纸面透明度", "出处与授权", "CC BY-NC-SA 4.0", "溟月", "powerdog996"]) {
-	if (!pageText.includes(needle)) throw new Error(`settings page missing ${needle}`);
+	if (node.props !== undefined && node.props.id === id) return node;
+	return findNode(node.children, id);
 }
 
-const creditsEntry = registeredItems.find((item) => item.options.name === "plugins.detail.section");
-if (creditsEntry === undefined) throw new Error("plugins.detail.section entry was not registered");
-const creditsForUs = creditsEntry.component({ subject: { kind: "bundle", pkg: { name: "dsh-theme-whalegirl" } } });
-const creditsText = renderText(creditsForUs);
-if (!creditsText.includes("视觉定型") || !creditsText.includes("ZipZipPipe") || !creditsText.includes("CC BY-NC-SA 4.0")) {
-	throw new Error("credits section missing the visual chain");
+/** Drive a rendered control the way a user drag or click does. */
+function setRange(node, id, value) {
+	const input = findNode(node, id);
+	assert(input !== null, `control #${id} was not rendered`);
+	if (input.props.type === "checkbox") input.props.onChange({ target: { checked: value === "on" } });
+	else input.props.onChange({ target: { value } });
 }
-const creditsForOther = creditsEntry.component({ subject: { kind: "bundle", pkg: { name: "another-plugin" } } });
-if (creditsForOther !== null) throw new Error("credits section must only render for this package");
 
-// Hosts without plugins.bundle.config still get the old built-in card.
-const fallbackItems = [];
-const fallbackSlots = {
-	inject(slot, factory) {
-		if (slot !== "plugins.item") throw new Error(`unexpected fallback slot: ${slot}`);
-		return factory();
-	},
-	register(options, component) {
-		fallbackItems.push({ options, component });
-		return () => {};
+function makeThemeService() {
+	const state = { registered: null, preference: null, setThemeCalls: [] };
+	return {
+		state,
+		register(def) {
+			state.registered = def;
+			return () => { state.registered = null; };
+		},
+		getTheme() {
+			return {
+				preference: state.preference,
+				themes: state.registered === null ? [] : [state.registered]
+			};
+		},
+		setTheme(id) {
+			state.preference = id;
+			state.setThemeCalls.push(id);
+		}
+	};
+}
+
+/* =================================================================== *
+ * 1. Module contract
+ * =================================================================== */
+
+const first = boot({ hooks: [] });
+const mod = first.module;
+
+assert(mod.isPlugin === true, "isPlugin flag missing");
+assert(Array.isArray(mod.inject) && mod.inject.includes("theme"), "inject must include 'theme'");
+// Strict Cordis throws when an undeclared service is read off the context
+// proxy, so slots must be declared before the settings card touches it.
+assert(mod.inject.includes("slots"), "inject must include 'slots'");
+assert(typeof mod.apply === "function", "apply missing");
+
+// Markers replaced by scripts/build.mjs.
+assert(!source.includes("__WHALEGIRL_BUILD_ID__"), "build id placeholder left in bundle");
+assert(source.includes("data:image/jpeg;base64,"), "background data URI missing");
+
+/* =================================================================== *
+ * 2. Register → guard → dispose on a host that renders every hook
+ * =================================================================== */
+
+{
+	const ALL_HOOKS = [
+		'[class*="_centerCol"]', '[class*="_sidebarCol"]', '[class$="_frame"]',
+		'[class*="_rightbarCol"]', '[data-slot="conversation.header"]',
+		'[class*="_tabHost"]', '[class*="_root"][data-phase]', '[role="tree"]'
+	];
+	const run = boot({ hooks: ALL_HOOKS });
+	const theme = makeThemeService();
+	const host = makeHost(theme);
+
+	run.module.apply(host.ctx);
+
+	assert(theme.state.registered !== null, "theme.register was not called");
+	assert(theme.state.registered.id === "deepseek-whalegirl", `bad id: ${theme.state.registered.id}`);
+	assert(theme.state.registered.colorScheme === "light", "colorScheme must be light");
+	assert(theme.state.preference === "deepseek-whalegirl", "setTheme not pinned");
+	assert(host.ctx.effects.includes("dsh-theme-whalegirl: register"), "effect label missing");
+	assert(run.documentMock.body.hasAttribute("data-dsh-whalegirl"), "body attribute not set");
+
+	const tokenNames = Object.keys(theme.state.registered.tokens);
+	for (const name of [
+		"--dsw-static-neutral-bluish-1000",
+		"--dsw-static-neutral-bluish-50",
+		"--dsw-alias-bg-base",
+		"--dsw-alias-brand-primary",
+		"--dsw-alias-button-primary-fill",
+		"--dsw-alias-label-primary",
+		"--dsw-specific-sidebar-fill",
+		"--dsw-specific-bubble",
+		"--dsw-shadow-lv3",
+		"--dsw-linear-gradient-think"
+	]) {
+		assert(name in theme.state.registered.tokens, `missing token ${name}`);
+		assert(theme.state.registered.tokens[name] !== "", `empty token ${name}`);
 	}
-};
-const fallbackCtx = {
-	effect(fn, label) { effects.push(label); fn(); return () => {}; },
-	on() { return () => {}; },
-	get(service) {
-		if (service === "theme") return themeService;
-		if (service === "slots") return fallbackSlots;
-		return undefined;
-	},
-	theme: themeService
-};
-loadedModule.apply(fallbackCtx);
-const fallbackEntry = fallbackItems.find((item) => item.options.name === "plugins.item");
-if (fallbackEntry === undefined) throw new Error("plugins.item fallback was not registered");
-if (fallbackEntry.options.id !== "whalegirl-appearance") throw new Error(`bad fallback id: ${fallbackEntry.options.id}`);
-const fallbackSummary = fallbackEntry.component({ view: "summary" });
-if (typeof fallbackSummary !== "string" || fallbackSummary.length === 0) {
-	throw new Error("fallback summary must render a one-liner string");
-}
-const fallbackPage = fallbackEntry.component({ view: "page" });
-if (fallbackPage === null || fallbackPage === undefined) throw new Error("fallback page rendered nothing");
-if (!renderText(fallbackPage).includes("对话纸面透明度")) throw new Error("fallback page missing conversation control");
+	console.log(`tokens registered: ${tokenNames.length}`);
 
-if (!skinCss.includes('data-slot="conversation.header"')) {
-	throw new Error("conversation-only paper rule missing");
+	const base = run.documentMock.getElementById(BASE_ID);
+	const skin = run.documentMock.getElementById(SKIN_ID);
+	assert(base !== null && skin !== null, "both stylesheet layers must be written");
+	assert(run.documentMock.head.childNodes[0] === base, "base layer must come before the skin layer");
+	assert(base.dataset.build !== undefined && skin.dataset.build !== undefined, "style tags must carry data-build");
+	assert(base.dataset.build === skin.dataset.build, "both layers must carry the same build id");
+
+	const baseCss = base.textContent;
+	const skinCss = skin.textContent;
+
+	// The split that keeps sliders cheap: bytes live in the static layer only.
+	assert(baseCss.includes("data:image/jpeg;base64,"), "base layer must carry the wallpaper");
+	assert(!skinCss.includes("data:image/jpeg;base64,"), "skin layer must NOT re-serialise the wallpaper bytes");
+	assert(skinCss.length < 12000, `skin layer should stay small, is ${skinCss.length} bytes`);
+	containsAll(baseCss, [
+		"color-scheme: light !important",
+		"--dsw-alias-label-primary: #352970 !important;",
+		"--dsw-specific-sidebar-nav-item-active-accent",
+		'@media (prefers-reduced-motion: reduce)',
+		'body[data-dsh-whalegirl] [role="tree"]'
+	], "base layer");
+
+	// Defaults ARE the look: reduced frost, no legacy 18px blur.
+	assert(skinCss.includes("backdrop-filter: blur(1px)"), "default frame blur should be 1px");
+	assert(!/blur\(18px\)/.test(skinCss), "legacy 18px blur must be gone by default");
+	assert(skinCss.includes("--dsw-alias-bg-base: ") && skinCss.includes("!important"), "adjustable surface overrides missing");
+	// Wallpaper geometry follows prefs and must therefore be in the skin layer.
+	containsAll(skinCss, ["background-position: 50% 50%;", "inset: 0;"], "wallpaper geometry");
+
+	// Paper model: one layer per column, nested page surfaces transparent.
+	containsAll(skinCss, [
+		'[class*="_centerCol"]',
+		'[class*="_rightbarCol"]',
+		'[class*="_tabHost"]',
+		'[class*="_root"][data-phase]',
+		'data-slot="conversation.header"'
+	], "paper-layer rules");
+	assert(/\[class\*="_sidebarCol"\] \{[^}]*--dsw-specific-sidebar-fill: transparent;[^}]*background: #abb4cf/.test(skinCss),
+		"sidebar column must own the wash and blank the inner fill");
+	assert(skinCss.includes('[class*="_tabHost"] {\n  background: transparent;'), "dock tab host must stay transparent");
+
+	/* Guard: a foreign preference write re-asserts our theme, deferred out of
+	   the dispatch so a presenter subscribed after this plugin cannot overwrite
+	   it with the foreign snapshot. `fire` plays the host's whole side of that:
+	   store the foreign preference, then publish the change. */
+	const fire = (preference) => {
+		theme.state.preference = preference;
+		theme.state.setThemeCalls = [];
+		for (const cb of host.listeners.get("theme/change") ?? []) cb({ preference });
+	};
+
+	fire("system");
+	await Promise.resolve();
+	await Promise.resolve();
+	assert(theme.state.setThemeCalls.at(-1) === "deepseek-whalegirl", "guard did not re-assert on system");
+	assert(theme.state.preference === "deepseek-whalegirl", "theme must be pinned after a system reset");
+
+	// An explicit light/dark pick is reclaimed too — the desktop shell writes
+	// exactly that when it adopts its durable section, so the theme owns the
+	// appearance until the plugin itself is toggled off.
+	fire("dark");
+	await Promise.resolve();
+	await Promise.resolve();
+	assert(theme.state.setThemeCalls.at(-1) === "deepseek-whalegirl", "guard did not re-assert on an explicit dark pick");
+
+	// …and its own change event must not loop.
+	fire("deepseek-whalegirl");
+	await Promise.resolve();
+	await Promise.resolve();
+	assert(theme.state.setThemeCalls.length === 0, "guard must ignore its own theme");
+
+	/* The card's own onChange IS the slider path: it must rewrite the skin layer
+	   only, and never touch the static layer that carries the wallpaper bytes. */
+	const settingsEntry = host.registered.find((item) => item.opts.name === SETTINGS_SLOT);
+	assert(settingsEntry !== undefined, "settings card must mount when slots exist");
+	const page = settingsEntry.component({ view: "page" });
+	const baseBytes = baseCss.length;
+	const baseText = base.textContent;
+	const skinBefore = skin.textContent;
+	setRange(page, "whalegirl-surfaceOpacity", "95");
+	setRange(page, "whalegirl-wallpaperY", "20");
+	setRange(page, "whalegirl-wallpaperZoom", "160");
+	assert(skin.textContent !== skinBefore, "an adjustment must rewrite the skin layer");
+	assert(skin.textContent.includes("background-position: 50% 20%;"), "wallpaper focus not applied");
+	assert(skin.textContent.includes("transform: scale(1.60);"), "wallpaper zoom not applied");
+	assert(base.textContent === baseText, "static layer must stay byte-identical through an adjustment");
+	assert(base.textContent.length === baseBytes, "adjusting prefs must not rewrite the static layer");
+
+	/* A sibling instance's teardown can strip a layer; the next pin puts it back
+	   in the right order, and dispose then removes whatever is actually there. */
+	base.remove();
+	fire("system");
+	await Promise.resolve();
+	await Promise.resolve();
+	const restored = run.documentMock.getElementById(BASE_ID);
+	assert(restored !== null, "a pin must restore a stripped base layer");
+	assert(run.documentMock.head.childNodes[0] === restored, "a restored base layer must stay ahead of the skin layer");
 }
 
-// One paper layer: the columns own it on every platform, nested page surfaces
-// (conversation root, dock tab host) stay transparent.
-for (const rule of ['[class*="_centerCol"]', '[class*="_rightbarCol"]', '[class*="_tabHost"]', '[class*="_root"][data-phase]']) {
-	if (!skinCss.includes(rule)) throw new Error(`missing paper-layer rule ${rule}`);
+/* =================================================================== *
+ * 2b. Dispose leaves nothing behind
+ * =================================================================== */
+
+{
+	const ALL_HOOKS = [
+		'[class*="_centerCol"]', '[class*="_sidebarCol"]', '[class$="_frame"]'
+	];
+	const run = boot({ hooks: ALL_HOOKS });
+	const theme = makeThemeService();
+	let dispose = null;
+	// Capture the effect's own return value, which is the real teardown closure.
+	run.module.apply({
+		...makeHost(theme, null).ctx,
+		effect(fn) { dispose = fn(); return () => {}; }
+	});
+	assert(typeof dispose === "function", "the effect must return a disposer");
+	const base = run.documentMock.getElementById(BASE_ID);
+	const skin = run.documentMock.getElementById(SKIN_ID);
+	assert(base !== null && skin !== null, "both layers exist before dispose");
+	dispose();
+	assert(run.documentMock.getElementById(BASE_ID) === null, "dispose must remove the base layer");
+	assert(run.documentMock.getElementById(SKIN_ID) === null, "dispose must remove the skin layer");
+	assert(base.isConnected === false && skin.isConnected === false, "disposed tags must be detached");
+	assert(!run.documentMock.body.hasAttribute("data-dsh-whalegirl"), "dispose must drop the body attribute");
+	assert(theme.state.registered === null, "dispose must unregister the theme it owns");
 }
-if (!/\[class\*="_sidebarCol"\] \{[^}]*--dsw-specific-sidebar-fill: transparent;[^}]*background: #abb4cf/.test(skinCss)) {
-	throw new Error("sidebar column must own the wash and blank the inner fill");
+
+/* =================================================================== *
+ * 3. Strict Cordis host: undeclared service reads throw
+ * =================================================================== */
+
+{
+	const theme = makeThemeService();
+	const getCalls = [];
+	const strictCtx = new Proxy(
+		{
+			effect(fn, label) { fn(); return () => {}; },
+			on() { return () => {}; },
+			get(service) {
+				getCalls.push(service);
+				if (service === "theme") return theme;
+				if (service === "slots") return { inject() {}, register() {} };
+				return undefined;
+			},
+			theme
+		},
+		{
+			get(target, prop) {
+				if (Reflect.has(target, prop)) return Reflect.get(target, prop);
+				throw new Error(`cannot get property "${String(prop)}" without inject`);
+			}
+		}
+	);
+	const run = boot();
+	let threw = null;
+	try {
+		run.module.apply(strictCtx);
+	} catch (error) {
+		threw = error;
+	}
+	assert(threw === null, `apply must survive strict ctx.slots: ${threw && threw.message}`);
+	assert(theme.state.preference === "deepseek-whalegirl", "theme must still apply when ctx.slots is undeclared");
+	assert(getCalls.includes("slots"), "slots fallback must use the inject-free ctx.get() probe");
 }
-if (!skinCss.includes('[class*="_tabHost"] {\n  background: transparent;')) {
-	throw new Error("dock tab host must stay transparent");
+
+/* =================================================================== *
+ * 4. Settings card: slots, bilingual copy, compatibility report
+ * =================================================================== */
+
+function mountCard(options) {
+	const run = boot(options);
+	const theme = makeThemeService();
+	const registered = [];
+	const slots = {
+		injected: [],
+		inject(slot, factory) {
+			assert(slot === SETTINGS_SLOT || slot === CREDITS_SLOT || slot === FALLBACK_SLOT, `unexpected slot: ${slot}`);
+			return factory();
+		},
+		register(opts, component) {
+			registered.push({ opts, component });
+			return () => {};
+		}
+	};
+	const ctx = {
+		effect(fn) { fn(); return () => {}; },
+		on() { return () => {}; },
+		get(service) {
+			if (service === "theme") return theme;
+			if (service === "slots") return slots;
+			return undefined;
+		},
+		theme
+	};
+	run.module.apply(ctx);
+	return { run, theme, registered };
+}
+
+function cardText(registered, view = "page") {
+	const entry = registered.find((item) => item.opts.name === SETTINGS_SLOT);
+	assert(entry !== undefined, "plugins.bundle.config entry was not registered");
+	assert(entry.opts.key === "dsh-theme-whalegirl", `bad bundle key: ${entry.opts.key}`);
+	const page = entry.component({ view });
+	assert(page !== null && page !== undefined, `${view} view rendered nothing`);
+	return { entry, page, text: typeof page === "string" ? page : renderText(page) };
+}
+
+{
+	// A Chinese host UI, which is what the plugin's audience sees by default.
+	const zh = mountCard({ hooks: ['[class*="_centerCol"]', '[class*="_sidebarCol"]', '[class$="_frame"]'] });
+	const summary = cardText(zh.registered, "summary");
+	assert(typeof summary.page === "string" && summary.page.length > 0, "summary view must return a one-liner string");
+	containsAll(summary.text, ["鲸鱼娘"], "zh summary");
+
+	const { text } = cardText(zh.registered);
+	containsAll(text, [
+		"对话纸面透明度",
+		"壁纸焦点上下",
+		"壁纸缩放",
+		"出处与授权",
+		"CC BY-NC-SA 4.0",
+		"溟月",
+		"powerdog996",
+		"清爽玻璃（默认）",
+		"DreamSkin 原味",
+		"纯净实底"
+	], "zh settings page");
+	// The escape hatch the README points at, shown where the user looks for it.
+	assert(text.includes("停用 dsh-theme-whalegirl"), "settings page must say how to leave the theme");
+	// Every hook present on this page → a clean report, and the tested version.
+	assert(text.includes("宿主适配 3/3"), `compat report missing: ${text.slice(0, 400)}`);
+	assert(/实测 DSH \d+\.\d+\.\d+/.test(text), "compat report must name the tested DSH version");
+	assert(text.includes("构建"), "status line must print the build id");
+	assert(zh.run.documentMock.getElementById("x") === null, "sanity: getElementById misses unknown ids");
+}
+
+{
+	// An English host, and a shell where two required hooks are gone: the
+	// report has to name them so a future breakage is quotable in an issue.
+	const warnConsole = { log() {}, error() {}, warnings: [], warn(msg) { this.warnings.push(msg); } };
+	const en = mountCard({
+		language: "en-US",
+		hostLang: "en",
+		hooks: ['[class*="_centerCol"]'],
+		console: warnConsole
+	});
+	const { text } = cardText(en.registered);
+	containsAll(text, [
+		"Whale Girl · Glass & Wallpaper",
+		"Conversation paper",
+		"Wallpaper focus (vertical)",
+		"Source & license",
+		"CC BY-NC-SA 4.0",
+		"Fresh glass (default)",
+		"Restore defaults"
+	], "en settings page");
+	assert(!text.includes("对话纸面透明度"), "English copy must not leak Chinese labels");
+	assert(text.includes("disable dsh-theme-whalegirl"), "en settings page must say how to leave the theme");
+	assert(text.includes("Host hooks 1/3"), `en compat report wrong: ${text.match(/Host hooks[^\n]*/)?.[0]}`);
+	assert(text.includes('[class*="_sidebarCol"]'), "en compat report must name the missing hook");
+	assert(warnConsole.warnings.some((w) => String(w).includes("host hook(s) not present")),
+		"a missing hook must also be logged for maintainers");
+}
+
+{
+	// The desktop shell: a Chinese host UI whose Electron renderer reports an
+	// English navigator. Trusting navigator.language alone put an English card
+	// in the middle of a Chinese app, so <html lang> has to win.
+	const desktop = mountCard({ language: "en-US", hostLang: "zh-CN", hooks: [] });
+	const { text } = cardText(desktop.registered);
+	containsAll(text, ["对话纸面透明度", "宿主适配"], "host <html lang> must outrank navigator");
+	assert(!text.includes("Conversation paper"), "a Chinese host must not render English labels");
+}
+
+{
+	// Pinned language wins over the browser, and survives a reload.
+	const pinned = boot({ language: "en-US", hooks: [] });
+	pinned.storage.setItem("dsh-whalegirl.prefs.v2", JSON.stringify({ uiLocale: "zh" }));
+	const theme = makeThemeService();
+	const registered = [];
+	const slots = {
+		inject(slot, factory) { return factory(); },
+		register(opts, component) { registered.push({ opts, component }); return () => {}; }
+	};
+	pinned.module.apply({
+		effect(fn) { fn(); return () => {}; },
+		on() { return () => {}; },
+		get(service) { return service === "theme" ? theme : service === "slots" ? slots : undefined; },
+		theme
+	});
+	containsAll(cardText(registered).text, ["对话纸面透明度"], "pinned uiLocale=zh");
+}
+
+{
+	// Credits also mount standalone on the package detail page, for this bundle
+	// only, and follow the same language.
+	const mount = mountCard({ hooks: [] });
+	const creditsEntry = mount.registered.find((item) => item.opts.name === CREDITS_SLOT);
+	assert(creditsEntry !== undefined, "plugins.detail.section entry was not registered");
+	const ours = renderText(creditsEntry.component({ subject: { kind: "bundle", pkg: { name: "dsh-theme-whalegirl" } } }));
+	containsAll(ours, ["视觉定型", "ZipZipPipe", "CC BY-NC-SA 4.0", "powerdog996"], "credits section (zh)");
+	const other = creditsEntry.component({ subject: { kind: "bundle", pkg: { name: "another-plugin" } } });
+	assert(other === null, "credits section must only render for this package");
+	const itemSubject = creditsEntry.component({ subject: { kind: "item", id: "whalegirl-appearance" } });
+	assert(renderText(itemSubject).includes("视觉定型"), "credits section must also match the fallback card");
+}
+
+/* =================================================================== *
+ * 5. Hosts without plugins.bundle.config keep the built-in card
+ * =================================================================== */
+
+{
+	const run = boot({ hooks: [] });
+	const theme = makeThemeService();
+	const fallback = [];
+	const slots = {
+		inject(slot, factory) {
+			// A host that has not shipped plugins.bundle.config yet: the plugin
+			// must fall back to the built-in card instead of losing the form.
+			if (slot === SETTINGS_SLOT) throw new Error("host has no bundle-config slot");
+			if (slot !== CREDITS_SLOT && slot !== FALLBACK_SLOT) throw new Error(`slot ${slot} not provided`);
+			return factory();
+		},
+		register(opts, component) {
+			fallback.push({ opts, component });
+			return () => {};
+		}
+	};
+	run.module.apply({
+		effect(fn) { fn(); return () => {}; },
+		on() { return () => {}; },
+		get(service) { return service === "theme" ? theme : service === "slots" ? slots : undefined; },
+		theme
+	});
+	const entry = fallback.find((item) => item.opts.name === FALLBACK_SLOT);
+	assert(entry !== undefined, "plugins.item fallback was not registered");
+	assert(entry.opts.id === "whalegirl-appearance", `bad fallback id: ${entry.opts.id}`);
+	assert(typeof entry.opts.label === "function" && entry.opts.label().length > 0, "fallback card needs a label");
+	const summary = entry.component({ view: "summary" });
+	assert(typeof summary === "string" && summary.length > 0, "fallback summary must render a one-liner string");
+	const page = entry.component({ view: "page" });
+	assert(page !== null && page !== undefined, "fallback page rendered nothing");
+	assert(renderText(page).includes("对话纸面透明度"), "fallback page missing conversation control");
+}
+
+/* =================================================================== *
+ * 6. A hot reload must not keep the previous build's static layer
+ * =================================================================== */
+
+{
+	const run = boot({ hooks: [] });
+	const stale = run.documentMock.createElement("style");
+	stale.id = BASE_ID;
+	stale.dataset.build = "00000000";
+	stale.textContent = "OLD-PALLETTE {}";
+	run.documentMock.head.appendChild(stale);
+	const theme = makeThemeService();
+	run.module.apply({
+		effect(fn) { fn(); return () => {}; },
+		on() { return () => {}; },
+		get(service) { return service === "theme" ? theme : undefined; },
+		theme
+	});
+	const base = run.documentMock.getElementById(BASE_ID);
+	const skin = run.documentMock.getElementById(SKIN_ID);
+	assert(base.textContent !== "OLD-PALLETTE {}", "a base layer from another build must be rewritten");
+	assert(base.textContent.includes("data:image/jpeg;base64,"), "the rewritten base layer must carry the palette and artwork");
+	assert(base.dataset.build === skin.dataset.build, "both layers must report the same build after a reload");
+}
+
+/* =================================================================== *
+ * 7. A host with no slots service at all still gets the theme
+ * =================================================================== */
+
+{
+	const run = boot({ hooks: [] });
+	const theme = makeThemeService();
+	run.module.apply({
+		effect(fn) { fn(); return () => {}; },
+		on() { return () => {}; },
+		get(service) { return service === "theme" ? theme : undefined; }
+	});
+	assert(theme.state.preference === "deepseek-whalegirl", "theme applies without any slots service");
+	assert(run.documentMock.getElementById(BASE_ID) !== null, "both layers exist without slots");
+	assert(run.documentMock.getElementById(SKIN_ID) !== null, "both layers exist without slots");
 }
 
 console.log("smoke test passed ✓");
