@@ -67,7 +67,7 @@ function makeElement() {
  * A host document. `hooks` is the set of plugin selector probes the mocked shell
  * actually renders, so the compatibility report can be driven both ways.
  */
-function makeDocument(hooks = null) {
+function makeDocument(hooks = null, hostLang = "zh-CN") {
 	const head = makeElement();
 	const body = makeElement();
 	const rendered = hooks === null ? null : new Set(hooks);
@@ -75,6 +75,8 @@ function makeDocument(hooks = null) {
 	return {
 		head,
 		body,
+		// The host sets <html lang> for its own localization; the card follows it.
+		documentElement: { lang: hostLang },
 		createElement: () => makeElement(),
 		// Styles are the only elements this plugin looks up by id, and they all
 		// live in <head>, so the childNodes list is the single source of truth —
@@ -106,7 +108,7 @@ const reactStub = {
  * selectors the shell renders; `options.console` captures warnings.
  */
 function boot(options = {}) {
-	const documentMock = makeDocument(options.hooks ?? null);
+	const documentMock = makeDocument(options.hooks ?? null, options.hostLang ?? "zh-CN");
 	const storage = makeStorage();
 	const noop = () => {};
 	const contextConsole = options.console ?? { log: noop, warn: noop, error: noop };
@@ -519,7 +521,7 @@ function cardText(registered, view = "page") {
 }
 
 {
-	// No navigator in this context → the Chinese copy is the fallback.
+	// A Chinese host UI, which is what the plugin's audience sees by default.
 	const zh = mountCard({ hooks: ['[class*="_centerCol"]', '[class*="_sidebarCol"]', '[class$="_frame"]'] });
 	const summary = cardText(zh.registered, "summary");
 	assert(typeof summary.page === "string" && summary.page.length > 0, "summary view must return a one-liner string");
@@ -548,11 +550,12 @@ function cardText(registered, view = "page") {
 }
 
 {
-	// English browser, and a shell where two required hooks are gone: the
+	// An English host, and a shell where two required hooks are gone: the
 	// report has to name them so a future breakage is quotable in an issue.
 	const warnConsole = { log() {}, error() {}, warnings: [], warn(msg) { this.warnings.push(msg); } };
 	const en = mountCard({
 		language: "en-US",
+		hostLang: "en",
 		hooks: ['[class*="_centerCol"]'],
 		console: warnConsole
 	});
@@ -572,6 +575,16 @@ function cardText(registered, view = "page") {
 	assert(text.includes('[class*="_sidebarCol"]'), "en compat report must name the missing hook");
 	assert(warnConsole.warnings.some((w) => String(w).includes("host hook(s) not present")),
 		"a missing hook must also be logged for maintainers");
+}
+
+{
+	// The desktop shell: a Chinese host UI whose Electron renderer reports an
+	// English navigator. Trusting navigator.language alone put an English card
+	// in the middle of a Chinese app, so <html lang> has to win.
+	const desktop = mountCard({ language: "en-US", hostLang: "zh-CN", hooks: [] });
+	const { text } = cardText(desktop.registered);
+	containsAll(text, ["对话纸面透明度", "宿主适配"], "host <html lang> must outrank navigator");
+	assert(!text.includes("Conversation paper"), "a Chinese host must not render English labels");
 }
 
 {
@@ -646,7 +659,32 @@ function cardText(registered, view = "page") {
 }
 
 /* =================================================================== *
- * 6. A host with no slots service at all still gets the theme
+ * 6. A hot reload must not keep the previous build's static layer
+ * =================================================================== */
+
+{
+	const run = boot({ hooks: [] });
+	const stale = run.documentMock.createElement("style");
+	stale.id = BASE_ID;
+	stale.dataset.build = "00000000";
+	stale.textContent = "OLD-PALLETTE {}";
+	run.documentMock.head.appendChild(stale);
+	const theme = makeThemeService();
+	run.module.apply({
+		effect(fn) { fn(); return () => {}; },
+		on() { return () => {}; },
+		get(service) { return service === "theme" ? theme : undefined; },
+		theme
+	});
+	const base = run.documentMock.getElementById(BASE_ID);
+	const skin = run.documentMock.getElementById(SKIN_ID);
+	assert(base.textContent !== "OLD-PALLETTE {}", "a base layer from another build must be rewritten");
+	assert(base.textContent.includes("data:image/jpeg;base64,"), "the rewritten base layer must carry the palette and artwork");
+	assert(base.dataset.build === skin.dataset.build, "both layers must report the same build after a reload");
+}
+
+/* =================================================================== *
+ * 7. A host with no slots service at all still gets the theme
  * =================================================================== */
 
 {

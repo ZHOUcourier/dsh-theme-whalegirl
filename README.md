@@ -19,7 +19,7 @@ English | [中文](README.zh.md)
 - **Light paper, not heavy frost** — the whale-girl artwork sits as a fixed backdrop behind the UI. Since 0.2.x the app-frame blur is 1px by default and the main column carries a single paper layer, so about 14% of the artwork reads through while body text keeps its contrast.
 - **Conversation-only paper opacity** — since 0.3.0 a separate slider controls the transcript column only. Long chats can show more wallpaper without making the home page, menus or plugin pages more translucent; those keep the global surface setting.
 - **Settings on the installed package page** — the form is contributed as the bundle's own configuration (`plugins.bundle.config`), so it appears on **Plugins → Installed → dsh-theme-whalegirl**, above the component list. It is no longer part of the built-in configuration cards.
-- **Adjustable glass & wallpaper** — frame blur, global surface and bubble translucency, conversation paper, wallpaper veil, visibility, focus, zoom and blur, and the composer focus glow are adjustable live, with three presets: 清爽玻璃 / DreamSkin 原味 / 纯净实底. The card itself switches between 中文 and English.
+- **Adjustable glass & wallpaper** — frame blur, global surface and bubble translucency, conversation paper, wallpaper veil, visibility, focus, zoom and blur, and the composer focus glow are adjustable live, with three presets: 清爽玻璃 / DreamSkin 原味 / 纯净实底. The card follows the host UI language and can be pinned to 中文 or English.
 - **Native integration** — the theme pins itself through `theme.setTheme()` and a `theme/change` guard re-asserts it whenever anything else writes another preference. That includes an explicit light/dark pick in Appearance, because the desktop shell writes exactly that when it adopts its stored settings after plugins mount: **the way back to the built-in appearance is to disable this plugin**, in the market Themes tab or on its installed-package page. The settings card says the same thing where you would look for it.
 - **Two stylesheet layers** — the token palette and the wallpaper bytes live in a static layer written once per mount; only the few declarations the sliders move are rewritten on adjustment, so dragging a control costs ~4 KB instead of re-parsing the ~0.4 MB wallpaper.
 - **Self-reporting compatibility** — the paper model depends on host class names that a refactor can rename, so the plugin probes them and prints `宿主适配 3/3 · 实测 DSH 0.2.1-rc.5` on the settings card, naming any miss in the console as well.
@@ -85,7 +85,7 @@ Open **Plugins → Installed → dsh-theme-whalegirl** and use the **「鲸鱼�
 | 壁纸缩放 / Wallpaper zoom | 100–200% | 100% | Scale of the artwork, for narrow windows where `cover` crops hard |
 | 壁纸模糊 / Wallpaper blur | 0–16px | 0px | Softens the artwork itself |
 | 输入框咖啡色聚焦光晕 / Focus glow | on/off | on | The DreamSkin composer focus ring |
-| 界面语言 / Language | auto → zh → en | auto | Card copy follows the browser language unless pinned |
+| 界面语言 / Language | auto → zh → en | auto | Card copy follows the **host UI** language (`<html lang>`), with the browser language only as a fallback; pin it here |
 
 The card header also prints the current values, the stylesheet build id, and the host-hook report (`宿主适配 3/3 · 实测 DSH 0.2.1-rc.5`).
 

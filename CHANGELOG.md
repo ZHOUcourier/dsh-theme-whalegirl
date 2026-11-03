@@ -7,7 +7,7 @@ Changes to `dsh-theme-whalegirl`. Release notes on [GitHub Releases](https://git
 ### Added
 
 - 壁纸焦点上下 and 壁纸缩放 sliders, so a narrow window whose `cover` crop cuts the subject off can bring it back.
-- The settings card is bilingual. Copy follows the browser language and the card can pin 中文 / English; the choice persists with the other preferences.
+- The settings card is bilingual. Copy follows the **host's** UI language (`<html lang>`), with the browser language only as a fallback — the desktop shell renders Chinese while its Electron renderer reports `navigator.language: "en"`, which put an English card in a Chinese app until it was fixed. The card can pin 中文 / English, and the choice persists with the other preferences.
 - A host-compatibility report on the settings card (`宿主适配 3/3 · 实测 DSH 0.2.1-rc.5`). The paper model depends on CSS-module class names the host can rename, so the plugin now probes them, names the misses on the card, and warns in the console — a future breakage becomes a quotable line instead of "the wallpaper disappeared".
 - `npm run test:browser` (`scripts/browser-check.mjs`): drives a real DSH web boot in Chromium and asserts computed styles — the palette lands, the wallpaper paints, the transcript column carries exactly one translucent paper layer, preferences survive a reload and really change the rendered alpha, and nothing throws. Falls back to the system Chrome when Playwright's Chromium is not installed.
 - The card states how to leave the theme (disable the plugin), which is the only path that works.
@@ -16,7 +16,7 @@ Changes to `dsh-theme-whalegirl`. Release notes on [GitHub Releases](https://git
 
 - The stylesheet is split in two layers. The static layer holds the token palette and the wallpaper data URI (~0.44 MB) and is written once per mount; the dynamic layer holds only the prefs-derived declarations (~4 KB) and is the only tag a slider rewrites. Adjusting glass used to re-serialise and re-parse the wallpaper on every input event.
 - `恢复默认` also resets the new wallpaper focus/zoom and language choice.
-- Disposing the plugin removes both layers by lookup, so a layer re-created by a late pin cannot survive the plugin being switched off.
+- Disposing the plugin removes both layers by lookup, so a layer re-created by a pin after a sibling teardown cannot survive the plugin being switched off. The static layer is also rewritten when it carries a different build id, which is what a hot reload leaves behind.
 
 ## 0.3.1
 
