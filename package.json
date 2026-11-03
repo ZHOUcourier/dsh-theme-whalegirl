@@ -1,6 +1,6 @@
 {
   "name": "dsh-theme-whalegirl",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "DeepSeek-鲸鱼娘 (Whale Girl) theme for the DeepSeek Harness web GUI — full --dsw-* token remap on the native theme runtime, ambient artwork behind a light paper layer with adjustable glass and a conversation-only paper opacity. Visual identity: 溟月 by 上善无形 → DeepSeek maid ver. by ZipZipPipe; artwork CC BY-NC-SA 4.0, code MIT.",
   "icon": "assets/icon.png",
   "type": "module",
@@ -40,6 +40,7 @@
     "skin.json",
     "README.md",
     "README.zh.md",
+    "CHANGELOG.md",
     "CREDITS.md",
     "LICENSE"
   ],
@@ -51,6 +52,7 @@
     "build": "node scripts/build.mjs",
     "check": "node scripts/build.mjs --check",
     "test": "node scripts/smoke.mjs",
+    "test:browser": "node scripts/browser-check.mjs",
     "prepare": "node scripts/build.mjs"
   },
   "license": "MIT AND CC-BY-NC-SA-4.0",
