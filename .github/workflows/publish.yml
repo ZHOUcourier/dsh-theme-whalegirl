@@ -21,7 +21,22 @@ jobs:
           node scripts/build.mjs --check || node scripts/build.mjs
           node scripts/smoke.mjs
       - name: Publish to npm
-        run: npm publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "dsh-theme-whalegirl@$VERSION" version >/dev/null 2>&1; then
+            echo "dsh-theme-whalegirl@$VERSION is already on npm; skipping publish."
+            exit 0
+          fi
+          if npm publish; then
+            exit 0
+          fi
+          # A concurrent or manual publish can win the race while this job runs
+          # (npm also answers 202 while a version is still being processed).
+          if npm view "dsh-theme-whalegirl@$VERSION" version >/dev/null 2>&1; then
+            echo "publish reported a failure, but $VERSION is on npm; continuing."
+            exit 0
+          fi
+          exit 1
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Attach version-free tarball to the release
